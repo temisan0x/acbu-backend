@@ -1,4 +1,4 @@
-import { Horizon, Keypair, TransactionBuilder, Operation } from 'stellar-sdk';
+import { Horizon, Keypair, TransactionBuilder, Operation, Transaction, FeeBumpTransaction } from 'stellar-sdk';
 import { config } from '../../config/env';
 import { logger } from '../../config/logger';
 
@@ -127,7 +127,7 @@ export class StellarClient {
   /**
    * Submit a transaction
    */
-  async submitTransaction(transaction: any) {
+  async submitTransaction(transaction: Transaction | FeeBumpTransaction) {
     try {
       const result = await this.server.submitTransaction(transaction);
       logger.info('Transaction submitted', {
@@ -164,12 +164,12 @@ export class StellarClient {
     try {
       const account = await this.getAccount(accountId);
       if (!assetCode || assetCode === 'XLM') {
-        const xlmBalance = account.balances.find((b: any) => b.asset_type === 'native');
+        const xlmBalance = account.balances.find((b) => b.asset_type === 'native');
         return xlmBalance ? parseFloat(xlmBalance.balance) : 0;
       }
 
       const assetBalance = account.balances.find(
-        (b: any) => b.asset_code === assetCode && b.asset_issuer === assetIssuer
+        (b) => 'asset_code' in b && b.asset_code === assetCode && 'asset_issuer' in b && b.asset_issuer === assetIssuer
       );
       return assetBalance ? parseFloat(assetBalance.balance) : 0;
     } catch (error) {
