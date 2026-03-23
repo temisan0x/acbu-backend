@@ -1,23 +1,12 @@
 /**
  * Investment withdrawal: request flow (retail 24h + messaging; business calendar or 1% forced removal).
  */
-<<<<<<< fix/issue-22-remove-any
-import { Response, NextFunction } from 'express';
-import { z } from 'zod';
-import { prisma } from '../config/database';
-import { AuthRequest } from '../middleware/auth';
-import { Decimal } from '@prisma/client/runtime/library';
-import { InvestmentWithdrawalRequest } from '@prisma/client';
-import { AppError } from '../middleware/errorHandler';
-import { isBusinessWithdrawalAllowedDate, INVESTMENT_FORCED_REMOVAL_FEE_PERCENT } from '../config/investment';
-import { getRabbitMQChannel } from '../config/rabbitmq';
-import { QUEUES } from '../config/rabbitmq';
-=======
 import { Response, NextFunction } from "express";
 import { z } from "zod";
 import { prisma } from "../config/database";
 import { AuthRequest } from "../middleware/auth";
 import { Decimal } from "@prisma/client/runtime/library";
+import { InvestmentWithdrawalRequest } from "@prisma/client";
 import { AppError } from "../middleware/errorHandler";
 import {
   isBusinessWithdrawalAllowedDate,
@@ -25,7 +14,6 @@ import {
 } from "../config/investment";
 import { getRabbitMQChannel } from "../config/rabbitmq";
 import { QUEUES } from "../config/rabbitmq";
->>>>>>> main
 
 const requestSchema = z.object({
   amount_acbu: z
@@ -134,11 +122,7 @@ export async function getInvestmentWithdrawRequests(
       take: 50,
     });
     res.status(200).json({
-<<<<<<< fix/issue-22-remove-any
       requests: list.map((r: InvestmentWithdrawalRequest) => ({
-=======
-      requests: list.map((r: any) => ({
->>>>>>> main
         id: r.id,
         amount_acbu: r.amountAcbu.toString(),
         status: r.status,
