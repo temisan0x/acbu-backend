@@ -27,7 +27,12 @@ function buildActorWhere(userId: string | null, organizationId: string | null) {
         {
           AND: [
             { userId: null },
-            { rateSnapshot: { path: ['organizationId'], equals: organizationId } },
+            {
+              rateSnapshot: {
+                path: ["organizationId"],
+                equals: organizationId,
+              },
+            },
           ],
         },
       ],
