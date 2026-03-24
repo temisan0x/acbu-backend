@@ -77,8 +77,7 @@ export async function mintFromUsdc(
         req.apiKey?.organizationId ?? null,
       );
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OnRampSwap delegate; run npx prisma generate
-    const swap = await (prisma as any).onRampSwap.create({
+    const swap = await prisma.onRampSwap.create({
       data: {
         userId,
         stellarAddress: wallet_address,

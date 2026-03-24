@@ -57,8 +57,7 @@ export async function processXlmToAcbu(
     ? Number(usdcEquivalent)
     : xlmNum * XLM_USD_RATE;
 
-  // OnRampSwap delegate; run npx prisma generate if types are missing
-  const swap = await (prisma as any).onRampSwap.findUnique({
+  const swap = await prisma.onRampSwap.findUnique({
     where: { id: onRampSwapId },
   });
   if (!swap || swap.status !== "pending_convert") {
@@ -66,7 +65,7 @@ export async function processXlmToAcbu(
     return;
   }
 
-  await (prisma as any).onRampSwap.update({
+  await prisma.onRampSwap.update({
     where: { id: onRampSwapId },
     data: { status: "processing" },
   });
@@ -77,7 +76,7 @@ export async function processXlmToAcbu(
       stellarAddress,
       userId,
     );
-    await (prisma as any).onRampSwap.update({
+    await prisma.onRampSwap.update({
       where: { id: onRampSwapId },
       data: {
         status: "completed",
@@ -93,7 +92,7 @@ export async function processXlmToAcbu(
       transactionId,
     });
   } catch (e) {
-    await (prisma as any).onRampSwap.update({
+    await prisma.onRampSwap.update({
       where: { id: onRampSwapId },
       data: { status: "failed" },
     });
