@@ -76,14 +76,18 @@ export class CacheService {
   }
 
   /**
-   * Delete multiple keys matching a pattern
+   * Delete multiple keys containing a specific substring pattern.
+   * Input is automatically escaped to prevent ReDoS (Regular Expression Denial of Service).
    */
   async deletePattern(pattern: string): Promise<void> {
     try {
       const db = getMongoDB();
       const collection = db.collection(CACHE_COLLECTION);
 
-      const regex = new RegExp(pattern);
+      // Sanitize input to prevent ReDoS (Regular Expression Denial of Service)
+      const sanitizedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const regex = new RegExp(sanitizedPattern);
+
       await collection.deleteMany({ key: { $regex: regex } });
     } catch (error) {
       logger.error("Cache delete pattern error", { pattern, error });
