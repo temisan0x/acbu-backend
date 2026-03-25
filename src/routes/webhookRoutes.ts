@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import {
   handleFlutterwaveWebhook,
   verifyFlutterwaveSignature,
+  handlePaystackWebhook,
+  verifyPaystackSignature,
 } from "../controllers/webhookController";
 
 const router: IRouter = Router();
@@ -10,6 +12,11 @@ router.post(
   "/flutterwave",
   verifyFlutterwaveSignature,
   handleFlutterwaveWebhook,
+);
+router.post(
+  "/paystack",
+  verifyPaystackSignature,
+  handlePaystackWebhook,
 );
 
 export default router;
