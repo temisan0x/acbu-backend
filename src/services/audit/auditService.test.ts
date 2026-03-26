@@ -1,23 +1,22 @@
-import { logAudit } from './auditService';
-import { logger } from '../../config/logger';
-import { sendEmail } from '../notification';
-import fs from 'fs';
-import path from 'path';
-import { config } from '../../config/env';
-import { getRabbitMQChannel, QUEUES } from '../../config/rabbitmq';
+import { logAudit } from "./auditService";
+import { logger } from "../../config/logger";
+import { sendEmail } from "../notification";
+import fs from "fs";
+import { config } from "../../config/env";
+import { getRabbitMQChannel, QUEUES } from "../../config/rabbitmq";
 
-jest.mock('../../config/rabbitmq', () => ({
+jest.mock("../../config/rabbitmq", () => ({
   getRabbitMQChannel: jest.fn(),
   QUEUES: {
-    AUDIT_LOGS: 'audit_logs',
+    AUDIT_LOGS: "audit_logs",
   },
 }));
 
-jest.mock('../notification', () => ({
+jest.mock("../notification", () => ({
   sendEmail: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock('../../config/logger', () => ({
+jest.mock("../../config/logger", () => ({
   logger: {
     warn: jest.fn(),
     error: jest.fn(),
@@ -27,11 +26,11 @@ jest.mock('../../config/logger', () => ({
   },
 }));
 
-describe('AuditService Reliability (RabbitMQ)', () => {
+describe("AuditService Reliability (RabbitMQ)", () => {
   const entry = {
-    eventType: 'USER_LOGIN',
-    action: 'LOGIN',
-    performedBy: 'user-1',
+    eventType: "USER_LOGIN",
+    action: "LOGIN",
+    performedBy: "user-1",
   };
 
   const mockChannel = {
@@ -43,7 +42,7 @@ describe('AuditService Reliability (RabbitMQ)', () => {
     (getRabbitMQChannel as jest.Mock).mockReturnValue(mockChannel);
   });
 
-  it('should publish to RabbitMQ successfully', async () => {
+  it("should publish to RabbitMQ successfully", async () => {
     mockChannel.sendToQueue.mockReturnValue(true);
 
     await logAudit(entry);
@@ -54,56 +53,64 @@ describe('AuditService Reliability (RabbitMQ)', () => {
       { persistent: true },
     );
     expect(logger.debug).toHaveBeenCalledWith(
-      expect.stringContaining('Audit entry published to queue'),
+      expect.stringContaining("Audit entry published to queue"),
       expect.anything(),
     );
   });
 
-  it('should fall back to file if publish fails (returns false)', async () => {
+  it("should fall back to file if publish fails (returns false)", async () => {
     mockChannel.sendToQueue.mockReturnValue(false);
-    
+
     // Mock FS
-    const appendFileSyncSpy = jest.spyOn(fs, 'appendFileSync').mockImplementation(() => {});
-    const mkdirSyncSpy = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => "");
-    const existsSyncSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const appendFileSyncSpy = jest
+      .spyOn(fs, "appendFileSync")
+      .mockImplementation(() => {});
+    const mkdirSyncSpy = jest
+      .spyOn(fs, "mkdirSync")
+      .mockImplementation(() => "");
+    const existsSyncSpy = jest.spyOn(fs, "existsSync").mockReturnValue(true);
 
     await logAudit(entry);
 
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('RabbitMQ audit publish failed'),
+      expect.stringContaining("RabbitMQ audit publish failed"),
       expect.anything(),
     );
     expect(appendFileSyncSpy).toHaveBeenCalled();
-    
+
     appendFileSyncSpy.mockRestore();
     mkdirSyncSpy.mockRestore();
     existsSyncSpy.mockRestore();
   });
 
-  it('should fall back to file if RabbitMQ throws error', async () => {
+  it("should fall back to file if RabbitMQ throws error", async () => {
     (getRabbitMQChannel as jest.Mock).mockImplementation(() => {
-      throw new Error('RabbitMQ Down');
+      throw new Error("RabbitMQ Down");
     });
-    
+
     // Mock FS
-    const appendFileSyncSpy = jest.spyOn(fs, 'appendFileSync').mockImplementation(() => {});
-    const mkdirSyncSpy = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => "");
-    const existsSyncSpy = jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+    const appendFileSyncSpy = jest
+      .spyOn(fs, "appendFileSync")
+      .mockImplementation(() => {});
+    const mkdirSyncSpy = jest
+      .spyOn(fs, "mkdirSync")
+      .mockImplementation(() => "");
+    const existsSyncSpy = jest.spyOn(fs, "existsSync").mockReturnValue(true);
 
     // Set alert email in config for this test
     const originalAlertEmail = config.notification.alertEmail;
-    config.notification.alertEmail = 'admin@example.com';
+    config.notification.alertEmail = "admin@example.com";
 
     await logAudit(entry);
 
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('CRITICAL: Audit logging failed'),
+      expect.stringContaining("CRITICAL: Audit logging failed"),
       expect.anything(),
     );
     expect(appendFileSyncSpy).toHaveBeenCalled();
     expect(sendEmail).toHaveBeenCalledWith(
-      'admin@example.com',
-      expect.stringContaining('CRITICAL: Audit Log System Failure'),
+      "admin@example.com",
+      expect.stringContaining("CRITICAL: Audit Log System Failure"),
       expect.anything(),
     );
 

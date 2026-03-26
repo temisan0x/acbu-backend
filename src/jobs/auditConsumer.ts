@@ -40,16 +40,22 @@ export async function startAuditConsumer() {
         attempt++;
         if (attempt <= MAX_RETRIES) {
           const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-          logger.warn(`Audit consumer retry ${attempt}/${MAX_RETRIES} in ${backoff}ms`, {
-            error: error.message || error,
-            eventType: entry.eventType,
-          });
+          logger.warn(
+            `Audit consumer retry ${attempt}/${MAX_RETRIES} in ${backoff}ms`,
+            {
+              error: error.message || error,
+              eventType: entry.eventType,
+            },
+          );
           await new Promise((resolve) => setTimeout(resolve, backoff));
         } else {
-          logger.error("Audit consumer failed after max retries, moving to DLQ", {
-            error: error.message || error,
-            entry,
-          });
+          logger.error(
+            "Audit consumer failed after max retries, moving to DLQ",
+            {
+              error: error.message || error,
+              entry,
+            },
+          );
           // Reject to DLQ
           channel.nack(msg, false, false);
         }
