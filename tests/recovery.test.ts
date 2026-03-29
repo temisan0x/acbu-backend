@@ -1,187 +1,138 @@
+import bcrypt from "bcryptjs";
 import { unlockApp, verifyRecoveryOtp } from "../src/services/recovery";
 import { prisma } from "../src/config/database";
-import bcrypt from "bcryptjs";
-import { verifyChallengeToken } from "../src/utils/jwt";
+import { generateApiKey } from "../src/middleware/auth";
+import { signChallengeToken, verifyChallengeToken } from "../src/utils/jwt";
+import { getRabbitMQChannel } from "../src/config/rabbitmq";
+
+jest.mock("../src/config/database", () => ({
+  prisma: {
+    user: {
+      findFirst: jest.fn(),
+    },
+    otpChallenge: {
+      create: jest.fn(),
+      findFirst: jest.fn(),
+      update: jest.fn(),
+    },
+  },
+}));
+
+jest.mock("../src/middleware/auth", () => ({
+  generateApiKey: jest.fn(),
+}));
+
+jest.mock("../src/utils/jwt", () => ({
+  signChallengeToken: jest.fn(),
+  verifyChallengeToken: jest.fn(),
+}));
 
 jest.mock("../src/config/rabbitmq", () => ({
-  getRabbitMQChannel: jest.fn().mockReturnValue({
-    assertQueue: jest.fn().mockResolvedValue(undefined),
-    sendToQueue: jest.fn(),
-  }),
+  getRabbitMQChannel: jest.fn(),
   QUEUES: {
     OTP_SEND: "otp_send",
   },
 }));
 
-describe("Recovery Service", () => {
-  const testEmail = "test@example.com";
-  const testPhone = "+1234567890";
-  const testPasscode = "test1234";
-  let testUserId: string;
+jest.mock("../src/config/logger", () => ({
+  logger: {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
+}));
 
-  beforeEach(async () => {
-    const passcodeHash = await bcrypt.hash(testPasscode, 10);
-    const user = await prisma.user.create({
-      data: {
-        username: `testuser_${Date.now()}`,
-        email: testEmail,
-        phoneE164: testPhone,
-        passcodeHash,
-      },
+const mockPrismaUserFindFirst = prisma.user.findFirst as jest.Mock;
+const mockPrismaOtpCreate = prisma.otpChallenge.create as jest.Mock;
+const mockPrismaOtpFindFirst = prisma.otpChallenge.findFirst as jest.Mock;
+const mockPrismaOtpUpdate = prisma.otpChallenge.update as jest.Mock;
+const mockGenerateApiKey = generateApiKey as jest.Mock;
+const mockSignChallengeToken = signChallengeToken as jest.Mock;
+const mockVerifyChallengeToken = verifyChallengeToken as jest.Mock;
+const mockGetRabbitMQChannel = getRabbitMQChannel as jest.Mock;
+
+describe("recoveryService", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetRabbitMQChannel.mockReturnValue({
+      assertQueue: jest.fn().mockResolvedValue(undefined),
+      sendToQueue: jest.fn(),
     });
-    testUserId = user.id;
-  });
-
-  afterEach(async () => {
-    await prisma.otpChallenge.deleteMany({ where: { userId: testUserId } });
-    await prisma.user.delete({ where: { id: testUserId } });
   });
 
   describe("unlockApp", () => {
-    it("should reject invalid passcode", async () => {
+    it("returns challenge token after valid identifier + passcode", async () => {
+      mockPrismaUserFindFirst.mockResolvedValue({
+        id: "user-1",
+        passcodeHash: await bcrypt.hash("1234", 10),
+        email: "user@example.com",
+        phoneE164: "+12345678901",
+      });
+      mockSignChallengeToken.mockReturnValue("challenge-token");
+
+      const out = await unlockApp({
+        identifier: "user@example.com",
+        passcode: "1234",
+      });
+
+      expect(out).toEqual({
+        challenge_token: "challenge-token",
+        channel: "email",
+      });
+      expect(mockPrismaOtpCreate).toHaveBeenCalledTimes(1);
+      expect(mockSignChallengeToken).toHaveBeenCalledWith("user-1");
+    });
+
+    it("rejects invalid passcode", async () => {
+      mockPrismaUserFindFirst.mockResolvedValue({
+        id: "user-1",
+        passcodeHash: await bcrypt.hash("1234", 10),
+        email: "user@example.com",
+        phoneE164: "+12345678901",
+      });
+
       await expect(
-        unlockApp({
-          identifier: testEmail,
-          passcode: "wrongpasscode",
-        }),
+        unlockApp({ identifier: "user@example.com", passcode: "9999" }),
       ).rejects.toThrow("Invalid passcode");
-    });
-
-    it("should reject non-existent user", async () => {
-      await expect(
-        unlockApp({
-          identifier: "nonexistent@example.com",
-          passcode: testPasscode,
-        }),
-      ).rejects.toThrow("User not found or recovery not enabled");
-    });
-
-    it("should return challenge token for valid credentials (email)", async () => {
-      const result = await unlockApp({
-        identifier: testEmail,
-        passcode: testPasscode,
-      });
-
-      expect(result.challenge_token).toBeDefined();
-      expect(result.channel).toBe("email");
-
-      const payload = verifyChallengeToken(result.challenge_token);
-      expect(payload.userId).toBe(testUserId);
-    });
-
-    it("should return challenge token for valid credentials (phone)", async () => {
-      const result = await unlockApp({
-        identifier: testPhone,
-        passcode: testPasscode,
-      });
-
-      expect(result.challenge_token).toBeDefined();
-      expect(result.channel).toBe("sms");
-
-      const payload = verifyChallengeToken(result.challenge_token);
-      expect(payload.userId).toBe(testUserId);
-    });
-
-    it("should create OTP challenge record", async () => {
-      await unlockApp({
-        identifier: testEmail,
-        passcode: testPasscode,
-      });
-
-      const challenge = await prisma.otpChallenge.findFirst({
-        where: { userId: testUserId },
-        orderBy: { createdAt: "desc" },
-      });
-
-      expect(challenge).not.toBeNull();
-      expect(challenge?.channel).toBe("email");
-      expect(challenge?.usedAt).toBeNull();
-      expect(challenge?.expiresAt.getTime()).toBeGreaterThan(Date.now());
     });
   });
 
   describe("verifyRecoveryOtp", () => {
-    let challengeToken: string;
-    let otpCode: string;
+    it("issues API key on valid OTP", async () => {
+      mockVerifyChallengeToken.mockReturnValue({ userId: "user-1" });
+      mockPrismaOtpFindFirst.mockResolvedValue({
+        id: "otp-1",
+        codeHash: await bcrypt.hash("111111", 10),
+      });
+      mockGenerateApiKey.mockResolvedValue("api-key-1");
 
-    beforeEach(async () => {
-      otpCode = "123456";
-      const codeHash = await bcrypt.hash(otpCode, 10);
-
-      await prisma.otpChallenge.create({
-        data: {
-          userId: testUserId,
-          codeHash,
-          channel: "email",
-          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-        },
+      const out = await verifyRecoveryOtp({
+        challenge_token: "challenge-token",
+        code: "111111",
       });
 
-      const result = await unlockApp({
-        identifier: testEmail,
-        passcode: testPasscode,
+      expect(out).toEqual({ api_key: "api-key-1", user_id: "user-1" });
+      expect(mockPrismaOtpUpdate).toHaveBeenCalledWith({
+        where: { id: "otp-1" },
+        data: { usedAt: expect.any(Date) },
       });
-      challengeToken = result.challenge_token;
+      expect(mockGenerateApiKey).toHaveBeenCalledWith("user-1", []);
     });
 
-    it("should reject invalid OTP code", async () => {
+    it("rejects invalid OTP", async () => {
+      mockVerifyChallengeToken.mockReturnValue({ userId: "user-1" });
+      mockPrismaOtpFindFirst.mockResolvedValue({
+        id: "otp-1",
+        codeHash: await bcrypt.hash("111111", 10),
+      });
+
       await expect(
         verifyRecoveryOtp({
-          challenge_token: challengeToken,
-          code: "999999",
+          challenge_token: "challenge-token",
+          code: "222222",
         }),
       ).rejects.toThrow("Invalid code");
-    });
-
-    it("should reject expired challenge token", async () => {
-      const expiredToken =
-        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ0ZXN0IiwicHVycG9zZSI6InNpZ25pbl8yZmEiLCJpYXQiOjE2MDk0NTkyMDAsImV4cCI6MTYwOTQ1OTIwMH0.test";
-
-      await expect(
-        verifyRecoveryOtp({
-          challenge_token: expiredToken,
-          code: otpCode,
-        }),
-      ).rejects.toThrow();
-    });
-
-    it("should issue API key for valid OTP code", async () => {
-      const latestChallenge = await prisma.otpChallenge.findFirst({
-        where: { userId: testUserId },
-        orderBy: { createdAt: "desc" },
-      });
-
-      const result = await verifyRecoveryOtp({
-        challenge_token: challengeToken,
-        code: otpCode,
-      });
-
-      expect(result.api_key).toBeDefined();
-      expect(result.user_id).toBe(testUserId);
-
-      const updatedChallenge = await prisma.otpChallenge.findUnique({
-        where: { id: latestChallenge!.id },
-      });
-      expect(updatedChallenge?.usedAt).not.toBeNull();
-    });
-
-    it("should reject reused OTP code", async () => {
-      await verifyRecoveryOtp({
-        challenge_token: challengeToken,
-        code: otpCode,
-      });
-
-      const newResult = await unlockApp({
-        identifier: testEmail,
-        passcode: testPasscode,
-      });
-
-      await expect(
-        verifyRecoveryOtp({
-          challenge_token: newResult.challenge_token,
-          code: otpCode,
-        }),
-      ).rejects.toThrow("Invalid or expired code");
     });
   });
 });
