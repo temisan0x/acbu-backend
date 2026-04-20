@@ -5,7 +5,11 @@ import {
   deleteMe,
   getReceive,
   getReceiveQrcode,
+  getMeBalance,
   postWalletConfirm,
+  postWalletActivate,
+  putWalletAddress,
+  deleteWallet,
   postContacts,
   getContacts,
   deleteContact,
@@ -26,7 +30,11 @@ router.patch("/me", patchMe);
 router.delete("/me", deleteMe);
 router.get("/me/receive", getReceive);
 router.get("/me/receive/qrcode", getReceiveQrcode);
+router.get("/me/balance", getMeBalance);
 router.post("/me/wallet/confirm", postWalletConfirm);
+router.post("/me/wallet/activate", postWalletActivate);
+router.put("/me/wallet", putWalletAddress);
+router.delete("/me/wallet", deleteWallet);
 router.post("/me/contacts", postContacts);
 router.get("/me/contacts", getContacts);
 router.delete("/me/contacts/:id", deleteContact);

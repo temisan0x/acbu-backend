@@ -38,6 +38,7 @@ export type SigninResult =
       wallet_created?: boolean;
       passphrase?: string;
       encryption_method_required?: boolean;
+      stellar_address?: string | null;
     };
 
 export interface Verify2faParams {
@@ -51,6 +52,7 @@ export interface Verify2faResult {
   wallet_created?: boolean;
   passphrase?: string;
   encryption_method_required?: boolean;
+  stellar_address?: string | null;
 }
 
 const OTP_EXPIRY_MINUTES = 10;
@@ -225,6 +227,11 @@ export async function signin(params: SigninParams): Promise<SigninResult> {
 
   const api_key = await generateApiKey(user.id, []);
   const wallet = await ensureWalletForUser(user.id);
+  const userFull = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { stellarAddress: true },
+  });
+
   await logAudit({
     eventType: "auth",
     entityType: "user",
@@ -239,7 +246,8 @@ export async function signin(params: SigninParams): Promise<SigninResult> {
     wallet_created?: boolean;
     passphrase?: string;
     encryption_method_required?: boolean;
-  } = { api_key, user_id: user.id };
+    stellar_address?: string | null;
+  } = { api_key, user_id: user.id, stellar_address: userFull?.stellarAddress };
   if (wallet.wallet_created && wallet.passphrase) {
     out.wallet_created = true;
     out.passphrase = wallet.passphrase;
@@ -297,6 +305,11 @@ export async function verify2fa(
 
   const api_key = await generateApiKey(user.id, []);
   const wallet = await ensureWalletForUser(user.id);
+  const userFull = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { stellarAddress: true },
+  });
+
   await logAudit({
     eventType: "auth",
     entityType: "user",
@@ -311,7 +324,8 @@ export async function verify2fa(
     wallet_created?: boolean;
     passphrase?: string;
     encryption_method_required?: boolean;
-  } = { api_key, user_id: user.id };
+    stellar_address?: string | null;
+  } = { api_key, user_id: user.id, stellar_address: userFull?.stellarAddress };
   if (wallet.wallet_created && wallet.passphrase) {
     out.wallet_created = true;
     out.passphrase = wallet.passphrase;

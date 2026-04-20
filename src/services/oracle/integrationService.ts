@@ -14,14 +14,18 @@ import { Decimal } from "@prisma/client/runtime/library";
 import { stellarClient } from "../stellar/client";
 import { fetchCentralBankRateUsd } from "./centralBankClient";
 import { fetchForexRateUsd } from "./forexClient";
+import { fetchExchangeRate as fetchWorldBankRate } from "../metrics/worldBankClient";
+import { SimulatedFintechProvider } from "../fintech/simulated";
+import { computeSyntheticBasketOneAcbuForBasket } from "./syntheticBasket";
 
 const OUTLIER_DEVIATION = 0.03; // 3%
 const ORACLE_RATE_DECIMALS = 1e7;
 
-/** Weights for 40/40/20 oracle aggregation (central bank, fintech, forex) */
-const LAYER_WEIGHT_CB = 0.4;
-const LAYER_WEIGHT_FINTECH = 0.4;
-const LAYER_WEIGHT_FOREX = 0.2;
+/** Weights for 25/25/25/25 oracle aggregation (central bank, fintech, forex, world bank) */
+const LAYER_WEIGHT_CB = 0.25;
+const LAYER_WEIGHT_FINTECH = 0.25;
+const LAYER_WEIGHT_FOREX = 0.25;
+const LAYER_WEIGHT_WORLD_BANK = 0.25;
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -42,11 +46,13 @@ function compositeRate(
   cb: number | null,
   fintech: number | null,
   forex: number | null,
+  wb: number | null,
 ): number {
   const parts: { w: number; v: number }[] = [];
   if (cb != null) parts.push({ w: LAYER_WEIGHT_CB, v: cb });
   if (fintech != null) parts.push({ w: LAYER_WEIGHT_FINTECH, v: fintech });
   if (forex != null) parts.push({ w: LAYER_WEIGHT_FOREX, v: forex });
+  if (wb != null) parts.push({ w: LAYER_WEIGHT_WORLD_BANK, v: wb });
   if (parts.length === 0) return 0;
   const totalW = parts.reduce((s, p) => s + p.w, 0);
   return parts.reduce((s, p) => s + (p.w / totalW) * p.v, 0);
@@ -63,31 +69,49 @@ export async function fetchAndStoreRates(): Promise<void> {
       let centralBankRate: number | null = null;
       let fintechRate: number | null = null;
       let forexRate: number | null = null;
+      let worldBankRate: number | null = null;
 
       centralBankRate = await fetchCentralBankRateUsd(currency);
 
       try {
         const fintech = fintechRouter.getProvider(currency);
-        const res = await fintech.convertCurrency(1, currency, "USD");
-        fintechRate = res.rate;
+        // Only call if it's not the simulated provider to avoid circular dependency
+        // (simulated provider depends on oracleRates being already in DB)
+        if (!(fintech instanceof SimulatedFintechProvider)) {
+          const res = await fintech.convertCurrency(1, currency, "USD");
+          fintechRate = res.rate;
+        }
       } catch (e) {
         logger.warn("Oracle: fintech rate failed", { currency, error: e });
       }
 
       forexRate = await fetchForexRateUsd(currency);
+      worldBankRate = await fetchWorldBankRate(currency);
 
-      const sources = [centralBankRate, fintechRate, forexRate].filter(
-        (r): r is number => r != null && r > 0,
-      );
+      const sources = [
+        centralBankRate,
+        fintechRate,
+        forexRate,
+        worldBankRate,
+      ].filter((r): r is number => r != null && r > 0);
       if (sources.length === 0) {
         logger.warn("Oracle: no rate for currency", { currency });
         continue;
       }
 
-      let composite = compositeRate(centralBankRate, fintechRate, forexRate);
-      const withOutliers = [centralBankRate, fintechRate, forexRate].filter(
-        (r): r is number => r != null && r > 0,
+      let composite = compositeRate(
+        centralBankRate,
+        fintechRate,
+        forexRate,
+        worldBankRate,
       );
+
+      const withOutliers = [
+        centralBankRate,
+        fintechRate,
+        forexRate,
+        worldBankRate,
+      ].filter((r): r is number => r != null && r > 0);
       const filtered = excludeOutliers(withOutliers, OUTLIER_DEVIATION);
       const inlierSet = new Set(filtered);
       if (filtered.length < withOutliers.length && filtered.length > 0) {
@@ -99,6 +123,9 @@ export async function fetchAndStoreRates(): Promise<void> {
             ? fintechRate
             : null,
           forexRate != null && inlierSet.has(forexRate) ? forexRate : null,
+          worldBankRate != null && inlierSet.has(worldBankRate)
+            ? worldBankRate
+            : null,
         );
       }
 
@@ -145,6 +172,9 @@ export async function fetchAndStoreRates(): Promise<void> {
           fintechRate: fintechRate != null ? new Decimal(fintechRate) : null,
           forexRate: forexRate != null ? new Decimal(forexRate) : null,
           medianRate: new Decimal(composite),
+          rawValues: {
+            worldBankRate: worldBankRate != null ? worldBankRate : null,
+          },
         },
       });
 
@@ -155,9 +185,22 @@ export async function fetchAndStoreRates(): Promise<void> {
           if (!sourceAccount) throw new Error("No source account available");
 
           const rate7 = Math.round(composite * ORACLE_RATE_DECIMALS).toString();
-          const sourcesForContract = [centralBankRate, fintechRate, forexRate]
+          const sourcesForContract = [
+            centralBankRate,
+            fintechRate,
+            forexRate,
+            worldBankRate,
+          ]
             .filter((r): r is number => r != null && r > 0)
-            .map(String);
+            .map((r) => Math.round(r * ORACLE_RATE_DECIMALS).toString());
+            
+          logger.info("Updating oracle rate", {
+            validator: sourceAccount,
+            currency,
+            rate: rate7,
+            sources: sourcesForContract,
+          });
+            
           await acbuOracleService.updateRate({
             validator: sourceAccount,
             currency,
@@ -165,8 +208,15 @@ export async function fetchAndStoreRates(): Promise<void> {
             sources: sourcesForContract,
             timestamp: timestampUnix,
           });
-        } catch (e) {
-          logger.warn("Oracle: contract update failed", { currency, error: e });
+          logger.info("Oracle: rate updated on-chain", {
+            currency,
+            rate: rate7,
+          });
+        } catch (e: any) {
+          logger.error("Oracle: contract update failed", {
+            currency,
+            error: e?.message || e,
+          });
         }
       }
     } catch (error) {
@@ -174,7 +224,17 @@ export async function fetchAndStoreRates(): Promise<void> {
     }
   }
 
-  const acbuUsd = await computeAcbuUsdRate();
+  // 1 ACBU = V USD notional (V=1) split by basket weights; local per leg q_c = (V·f_c)/r_c, f_c = w_c/W.
+  const basketOne = await computeSyntheticBasketOneAcbuForBasket(basket, 1);
+  if (!basketOne || basketOne.legs.length === 0) {
+    logger.error(
+      "Oracle: skipping AcbuRate — no basket leg has a fresh oracle USD rate",
+    );
+    return;
+  }
+
+  const acbuUsd = basketOne.usdNotionalPerAcbu;
+
   const prev24h = await prisma.acbuRate.findFirst({
     where: { timestamp: { lt: new Date(now.getTime() - 24 * 60 * 60 * 1000) } },
     orderBy: { timestamp: "desc" },
@@ -185,15 +245,9 @@ export async function fetchAndStoreRates(): Promise<void> {
         100
       : null;
 
-  // 1 ACBU in each local currency = acbuUsd / rate_currency_usd
   const acbuPerCurrency: Record<string, number> = {};
-  for (const { currency } of basket) {
-    const latest = await prisma.oracleRate.findFirst({
-      where: { currency },
-      orderBy: { timestamp: "desc" },
-    });
-    const rateUsd = latest?.medianRate.toNumber() ?? 0;
-    if (rateUsd > 0) acbuPerCurrency[currency] = acbuUsd / rateUsd;
+  for (const leg of basketOne.legs) {
+    acbuPerCurrency[leg.currency] = leg.localPerOneAcbu;
   }
 
   const acbuRateData: Record<string, Decimal | null> = {
@@ -227,31 +281,6 @@ export async function fetchAndStoreRates(): Promise<void> {
     data: acbuRateData as unknown as Prisma.AcbuRateCreateInput,
   });
   logger.info("Oracle integration: rates updated", { acbuUsd, change24hUsd });
-}
-
-/**
- * Compute 1 ACBU in USD from basket weights and latest rates.
- * Reference amounts are derived so that 1 ACBU ≈ 1 USD: refAmount_c = (K * weight_c) / rate_c_usd
- * with K = 100 / sum(weight_c²).
- */
-async function computeAcbuUsdRate(): Promise<number> {
-  const basket = await basketService.getCurrentBasket();
-  const weights = basket.map((b) => b.weight);
-  const weightSqSum = weights.reduce((s, w) => s + w * w, 0);
-  const K = weightSqSum > 0 ? 100 / weightSqSum : 0;
-
-  let totalUsd = 0;
-  for (const { currency, weight } of basket) {
-    const latest = await prisma.oracleRate.findFirst({
-      where: { currency },
-      orderBy: { timestamp: "desc" },
-    });
-    const rateUsd = latest?.medianRate.toNumber() ?? 0;
-    if (rateUsd <= 0) continue;
-    const refAmount = (K * weight) / rateUsd;
-    totalUsd += (weight / 100) * refAmount * rateUsd;
-  }
-  return totalUsd;
 }
 
 export async function getTwap24h(currency: string): Promise<number | null> {

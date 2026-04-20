@@ -15,13 +15,9 @@ const MAX_RETRIES = 5;
 export async function startWebhookConsumer(): Promise<void> {
   const ch = await connectRabbitMQ();
 
-  // Main queue with DLQ configuration
+  // Main queue
   await ch.assertQueue(QUEUES.WEBHOOKS, {
     durable: true,
-    arguments: {
-      "x-dead-letter-exchange": "",
-      "x-dead-letter-routing-key": QUEUES.WEBHOOKS_DLQ,
-    },
   });
 
   // Dead-letter queue

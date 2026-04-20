@@ -120,6 +120,15 @@ export const config = {
     network: process.env.STELLAR_NETWORK || "testnet",
     horizonUrl:
       process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org",
+    /** Soroban RPC (simulate + send). Override if default host fails DNS (e.g. use SDF friendbot list / custom RPC). */
+    sorobanRpcUrl: ((): string => {
+      const explicit = process.env.STELLAR_SOROBAN_RPC_URL?.trim();
+      if (explicit) return explicit;
+      const net = process.env.STELLAR_NETWORK || "testnet";
+      return net === "mainnet"
+        ? "https://soroban-mainnet.stellar.org"
+        : "https://soroban-testnet.stellar.org";
+    })(),
     secretKey: process.env.STELLAR_SECRET_KEY || "",
     networkPassphrase:
       process.env.STELLAR_NETWORK === "mainnet"

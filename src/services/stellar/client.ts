@@ -5,7 +5,7 @@ import {
   Operation,
   Transaction,
   FeeBumpTransaction,
-} from "stellar-sdk";
+} from "@stellar/stellar-sdk";
 import { config } from "../../config/env";
 import { logger } from "../../config/logger";
 
@@ -78,6 +78,16 @@ export class StellarClient {
     return this.networkPassphrase;
   }
 
+  /** Soroban JSON-RPC base URL for simulateTransaction / sendTransaction / getTransaction. */
+  getSorobanRpcUrl(): string {
+    return config.stellar.sorobanRpcUrl;
+  }
+
+  /** Horizon base URL (useful for the public config endpoint and diagnostics). */
+  getHorizonUrl(): string {
+    return config.stellar.horizonUrl;
+  }
+
   /**
    * Get the keypair (if initialized)
    */
@@ -101,10 +111,13 @@ export class StellarClient {
           });
           throw error;
         }
-        logger.warn(`Failed to load account (attempt ${i + 1}/${retries}). Retrying...`, {
-          accountId,
-          error: error.message,
-        });
+        logger.warn(
+          `Failed to load account (attempt ${i + 1}/${retries}). Retrying...`,
+          {
+            accountId,
+            error: error.message,
+          },
+        );
         await new Promise((resolve) => setTimeout(resolve, 2000 * (i + 1)));
       }
     }

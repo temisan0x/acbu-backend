@@ -59,7 +59,8 @@ export async function startRebalancingScheduler(): Promise<void> {
     }, delayMs);
   };
 
-  await runOnce();
+  // Run initial check in background to avoid blocking server startup
+  void runOnce();
   scheduleNext();
   logger.info("Rebalancing scheduler started (daily at 00:00 UTC)");
 }

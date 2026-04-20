@@ -5,7 +5,7 @@
 import { prisma } from "../../config/database";
 import { logger } from "../../config/logger";
 import { basketService } from "../basket";
-import { fetchGdpUsd } from "./worldBankClient";
+import { fetchGdpUsd, fetchPopulation } from "./worldBankClient";
 import { BASKET_CURRENCIES } from "../../config/basket";
 import { Decimal } from "@prisma/client/runtime/library";
 
@@ -69,9 +69,13 @@ export async function ingestMetricsAndProposeWeights(
   }
 
   const gdpRaw = new Map<string, number>();
+  const populationRaw = new Map<string, number>();
   for (const currency of currencies) {
     const gdp = await fetchGdpUsd(currency);
     if (gdp != null && gdp > 0) gdpRaw.set(currency, gdp);
+
+    const pop = await fetchPopulation(currency);
+    if (pop != null && pop > 0) populationRaw.set(currency, pop);
   }
 
   const tradeRaw = await getTradeVolumeByCurrency(periodDays);
@@ -95,6 +99,7 @@ export async function ingestMetricsAndProposeWeights(
     const liquidityScore = liquidityScores.get(currency) ?? 0;
     const rawValues = {
       gdpUsd: gdpRaw.get(currency) ?? null,
+      population: populationRaw.get(currency) ?? null,
       tradeVolume: tradeRaw.get(currency) ?? null,
     };
 

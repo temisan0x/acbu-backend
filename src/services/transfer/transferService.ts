@@ -2,7 +2,12 @@
  * Transfer service: resolve alias to stellarAddress, create Transaction, optionally submit Stellar payment.
  * Uses direct wallets (G...). When getSenderSigningKey is provided, signs and submits; otherwise leaves pending.
  */
-import { Operation, Asset, Keypair, TransactionBuilder } from "stellar-sdk";
+import {
+  Operation,
+  Asset,
+  Keypair,
+  TransactionBuilder,
+} from "@stellar/stellar-sdk";
 import { Decimal } from "@prisma/client/runtime/library";
 import { prisma } from "../../config/database";
 import { stellarClient } from "../stellar/client";

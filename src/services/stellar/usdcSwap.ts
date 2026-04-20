@@ -12,7 +12,7 @@
  * ACBU unless this function resolves successfully.
  */
 
-import { Asset, Operation, TransactionBuilder } from "stellar-sdk";
+import { Asset, Operation, TransactionBuilder } from "@stellar/stellar-sdk";
 import { config } from "../../config/env";
 import { logger } from "../../config/logger";
 import { stellarClient } from "./client";

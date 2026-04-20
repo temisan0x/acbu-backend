@@ -1,4 +1,4 @@
-import { xdr, Address } from "stellar-sdk";
+import { xdr, Address } from "@stellar/stellar-sdk";
 
 const ADMIN = "GDHO63RZEUNDRVF6WA7HD4D7PLNLUMSK5H74ONW3MEF3VKF4BZJ6GDML";
 

@@ -10,11 +10,16 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 
 export async function startReserveTrackingScheduler(): Promise<void> {
   if (intervalId) return;
-  try {
-    await reserveTracker.trackReserves();
-  } catch (e) {
-    logger.error("Reserve tracking initial run failed", e);
-  }
+
+  // Run initial update in background to avoid blocking server startup
+  void (async () => {
+    try {
+      await reserveTracker.trackReserves();
+    } catch (e) {
+      logger.error("Reserve tracking initial run failed", e);
+    }
+  })();
+
   intervalId = setInterval(async () => {
     try {
       await reserveTracker.trackReserves();

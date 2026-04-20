@@ -50,6 +50,7 @@ async function main(): Promise<void> {
     const metric = metrics.find((m: any) => m.currency === config.currency);
     const rawValues = metric?.rawValues as Record<string, any> | undefined;
     const rawGdp = rawValues?.gdpUsd ? `$${Number(rawValues.gdpUsd).toLocaleString()}` : "N/A";
+    const rawPop = rawValues?.population ? Number(rawValues.population).toLocaleString() : "N/A";
     const rawTrade = rawValues?.tradeVolume ? Number(rawValues.tradeVolume).toLocaleString() : "0";
     
     return {
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
       "Trade Score": metric?.tradeScore?.toNumber().toFixed(2) || "0.00",
       "Liquidity Score": metric?.liquidityScore?.toNumber().toFixed(2) || "0.00",
       "Raw GDP (USD)": rawGdp,
+      "Raw Population": rawPop,
       "Raw Trade Vol": rawTrade
     };
   });

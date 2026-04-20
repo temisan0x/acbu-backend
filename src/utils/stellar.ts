@@ -5,7 +5,7 @@
  * starting with 'G'. This module provides validation to prevent invalid
  * addresses from entering the database or being used in transactions.
  */
-import { StrKey } from "stellar-sdk";
+import { StrKey } from "@stellar/stellar-sdk";
 
 /**
  * Validate that a string is a valid Stellar public key (G-address).

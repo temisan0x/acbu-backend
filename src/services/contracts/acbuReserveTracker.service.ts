@@ -1,6 +1,17 @@
 import { contractClient, ContractClient } from "../stellar/contractClient";
 import { stellarClient } from "../stellar/client";
 import { logger } from "../../config/logger";
+import { xdr } from "@stellar/stellar-sdk";
+
+/** Soroban `CurrencyCode` — tuple struct with one string field. */
+function currencyCodeToScVal(code: string): xdr.ScVal {
+  const c = code.trim().toUpperCase();
+  if (c.length !== 3) {
+    throw new Error("currency must be a 3-letter ISO code");
+  }
+  // CurrencyCode(pub Vec<String>) encodes as vec([ vec([ string("NGN") ]) ]).
+  return xdr.ScVal.scvVec([xdr.ScVal.scvVec([xdr.ScVal.scvString(c)])]);
+}
 
 export interface UpdateReserveParams {
   updater: string; // The authorized address performing the update
@@ -38,9 +49,10 @@ export class ReserveTrackerService {
       }
 
       // Build function arguments: [updater, currency, amount, value_usd]
+      const currencyScVal = currencyCodeToScVal(params.currency);
       const args = [
-        ContractClient.toScVal(params.updater),
-        ContractClient.toScVal(params.currency),
+        ContractClient.toScVal(params.updater), // Address
+        currencyScVal,
         ContractClient.toScVal(BigInt(params.amount)),
         ContractClient.toScVal(BigInt(params.valueUsd)),
       ];
@@ -66,25 +78,42 @@ export class ReserveTrackerService {
   }
 
   /**
-   * Get reserve data for a currency
+   * Get current reserves for all currencies (contract-authoritative).
    */
-  async getReserve(currency: string): Promise<ReserveData> {
+  async getAllReserves(): Promise<Record<string, ReserveData>> {
     try {
       const result = await this.contractClient.readContract(
         this.contractId,
-        "get_reserve",
-        [ContractClient.toScVal(currency)],
+        "get_all_reserves",
+        [],
       );
 
-      const reserveData = ContractClient.fromScVal(result) as any;
-      return {
-        currency: reserveData.currency.toString(),
-        amount: reserveData.amount.toString(),
-        valueUsd: reserveData.value_usd.toString(),
-        timestamp: Number(reserveData.timestamp),
-      };
+      const map = ContractClient.fromScVal(result) as any;
+      const out: Record<string, ReserveData> = {};
+
+      // `fromScVal` returns a JS Map-like for Soroban maps in most paths.
+      // Support both real Map and plain object fallbacks.
+      const entries: Array<[any, any]> =
+        map instanceof Map
+          ? Array.from(map.entries())
+          : typeof map === "object" && map
+            ? Object.entries(map as any)
+            : [];
+
+      for (const [, v] of entries) {
+        const currency = v?.currency?.toString?.() ?? "";
+        if (!currency) continue;
+        out[currency] = {
+          currency,
+          amount: v?.amount?.toString?.() ?? "0",
+          valueUsd: v?.value_usd?.toString?.() ?? "0",
+          timestamp: Number(v?.timestamp ?? 0),
+        };
+      }
+
+      return out;
     } catch (error) {
-      logger.error("Failed to get reserve", { currency, error });
+      logger.error("Failed to get all reserves", { error });
       throw error;
     }
   }
@@ -122,44 +151,6 @@ export class ReserveTrackerService {
       return totalValue.toString();
     } catch (error) {
       logger.error("Failed to get total reserve value", { error });
-      throw error;
-    }
-  }
-
-  /**
-   * Get minimum required ratio
-   */
-  async getMinRatio(): Promise<number> {
-    try {
-      const result = await this.contractClient.readContract(
-        this.contractId,
-        "get_min_ratio",
-        [],
-      );
-
-      const minRatio = ContractClient.fromScVal(result);
-      return Number(minRatio) / 10000; // Convert from basis points to decimal
-    } catch (error) {
-      logger.error("Failed to get min ratio", { error });
-      throw error;
-    }
-  }
-
-  /**
-   * Get target ratio
-   */
-  async getTargetRatio(): Promise<number> {
-    try {
-      const result = await this.contractClient.readContract(
-        this.contractId,
-        "get_target_ratio",
-        [],
-      );
-
-      const targetRatio = ContractClient.fromScVal(result);
-      return Number(targetRatio) / 10000; // Convert from basis points to decimal
-    } catch (error) {
-      logger.error("Failed to get target ratio", { error });
       throw error;
     }
   }

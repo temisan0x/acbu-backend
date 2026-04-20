@@ -1,7 +1,7 @@
 /**
  * Wallet lifecycle: create keypair on first signin, store secret after user confirms encryption.
  */
-import { Keypair } from "stellar-sdk";
+import { Keypair } from "@stellar/stellar-sdk";
 import { prisma } from "../../config/database";
 import { logger } from "../../config/logger";
 import { assertValidStellarAddress } from "../../utils/stellar";
@@ -23,7 +23,8 @@ export async function ensureWalletForUser(
     select: { id: true, stellarAddress: true, encryptedStellarSecret: true },
   });
   if (!user) return { wallet_created: false };
-  if (user.encryptedStellarSecret != null) return { wallet_created: false };
+  // If stellarAddress is already set (either generated, imported, or external), do nothing
+  if (user.stellarAddress != null) return { wallet_created: false };
 
   const keypair = Keypair.random();
   const publicKey = keypair.publicKey();

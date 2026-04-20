@@ -154,10 +154,30 @@ export async function mintFromUsdcInternal(
     },
   });
   const addresses = getContractAddresses();
-  if (addresses.minting) {
-    const sourceAccount = stellarClient.getKeypair()?.publicKey();
-    if (!sourceAccount) throw new Error("No source account available");
+  if (!addresses.minting) {
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "failed",
+        rateSnapshot: { error: "CONTRACT_MINTING not configured" },
+      },
+    });
+    throw new Error("Minting contract address not configured");
+  }
 
+  const sourceAccount = stellarClient.getKeypair()?.publicKey();
+  if (!sourceAccount) {
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "failed",
+        rateSnapshot: { error: "No Stellar source account (STELLAR_SECRET_KEY)" },
+      },
+    });
+    throw new Error("No source account available");
+  }
+
+  try {
     const result = await acbuMintingService.mintFromUsdc({
       user: sourceAccount,
       usdcAmount: usdcAmount7,
@@ -174,8 +194,18 @@ export async function mintFromUsdcInternal(
       },
     });
     return { transactionId: tx.id, acbuAmount: acbuNum };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Soroban mint_from_usdc failed:", message);
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "failed",
+        rateSnapshot: { error: message, at: new Date().toISOString() },
+      },
+    });
+    throw err;
   }
-  return { transactionId: tx.id, acbuAmount: 0 };
 }
 
 const depositBodySchema = z.object({

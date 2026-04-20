@@ -75,6 +75,7 @@ export async function postSignin(
     const payload: Record<string, unknown> = {
       api_key: result.api_key,
       user_id: result.user_id,
+      stellar_address: result.stellar_address,
     };
     if (result.wallet_created) payload.wallet_created = true;
     if (result.passphrase) payload.passphrase = result.passphrase;
@@ -139,6 +140,7 @@ export async function postVerify2fa(
     const payload: Record<string, unknown> = {
       api_key: result.api_key,
       user_id: result.user_id,
+      stellar_address: result.stellar_address,
     };
     if (result.wallet_created) payload.wallet_created = true;
     if (result.passphrase) payload.passphrase = result.passphrase;

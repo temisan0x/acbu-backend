@@ -17,7 +17,9 @@ const INTERVAL_MS =
   60 *
   1000;
 
-let timeoutId: ReturnType<typeof setTimeout> | null = null;
+const MAX_TIMEOUT_MS = 2147483647; // Max for 32-bit signed int
+
+let stopRequested = false;
 
 function getPeriod(): string {
   const now = new Date();
@@ -26,39 +28,47 @@ function getPeriod(): string {
   return `${y}-${m}`;
 }
 
-export async function startProposedWeightsScheduler(): Promise<void> {
-  if (timeoutId) return;
+/**
+ * Custom sleep that handles long durations exceeding setTimeout limit
+ */
+async function longSleep(ms: number): Promise<void> {
+  let remaining = ms;
+  while (remaining > 0 && !stopRequested) {
+    const delay = Math.min(remaining, MAX_TIMEOUT_MS);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    remaining -= delay;
+  }
+}
 
-  async function runOnce(): Promise<void> {
-    try {
-      const period = getPeriod();
-      await ingestMetricsAndProposeWeights(period);
-    } catch (e) {
-      logger.error("Proposed weights job failed", { error: e });
+export async function startProposedWeightsScheduler(): Promise<void> {
+  stopRequested = false;
+
+  async function runLoop(): Promise<void> {
+    while (!stopRequested) {
+      try {
+        const period = getPeriod();
+        await ingestMetricsAndProposeWeights(period);
+      } catch (e) {
+        logger.error("Proposed weights job failed", { error: e });
+      }
+
+      logger.info("Proposed weights next run scheduled", {
+        inDays: INTERVAL_MS / (24 * 60 * 60 * 1000),
+      });
+
+      await longSleep(INTERVAL_MS);
     }
   }
 
-  function scheduleNext(): void {
-    timeoutId = setTimeout(async () => {
-      await runOnce();
-      scheduleNext();
-    }, INTERVAL_MS);
-    logger.info("Proposed weights next run scheduled", {
-      inDays: INTERVAL_MS / (24 * 60 * 60 * 1000),
-    });
-  }
+  // Run in background
+  void runLoop();
 
-  await runOnce();
-  scheduleNext();
   logger.info("Proposed weights scheduler started", {
     intervalDays: INTERVAL_MS / (24 * 60 * 60 * 1000),
   });
 }
 
 export function stopProposedWeightsScheduler(): void {
-  if (timeoutId) {
-    clearTimeout(timeoutId);
-    timeoutId = null;
-    logger.info("Proposed weights scheduler stopped");
-  }
+  stopRequested = true;
+  logger.info("Proposed weights scheduler stopped");
 }

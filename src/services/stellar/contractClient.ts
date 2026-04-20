@@ -3,11 +3,42 @@ import {
   Operation,
   xdr,
   Address,
-  SorobanRpc,
-} from "stellar-sdk";
+  rpc,
+} from "@stellar/stellar-sdk";
 import { stellarClient } from "./client";
 import { getBaseFee } from "./feeManager";
 import { logger } from "../../config/logger";
+import { wrapSorobanInvokeError } from "./sorobanInvokeErrors";
+
+function isRetryableSorobanNetworkError(message: string): boolean {
+  return /ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|fetch failed|socket hang up/i.test(
+    message,
+  );
+}
+
+async function simulateTransactionWithRetry(
+  rpcServer: rpc.Server,
+  transaction: Parameters<rpc.Server["simulateTransaction"]>[0],
+  logCtx: Record<string, unknown>,
+): Promise<rpc.Api.SimulateTransactionResponse> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await rpcServer.simulateTransaction(transaction);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!isRetryableSorobanNetworkError(msg) || attempt === 3) {
+        throw e;
+      }
+      logger.warn("Soroban simulateTransaction failed (retrying)", {
+        ...logCtx,
+        attempt,
+        message: msg,
+      });
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw new Error("simulateTransactionWithRetry: exhausted retries");
+}
 
 export interface ContractCallOptions {
   contractId: string;
@@ -70,7 +101,6 @@ export class ContractClient {
             args,
           }),
         ),
-        auth: [],
       });
 
       const sourceAccountObj = await stellarClient.getAccount(sourceAccount);
@@ -83,29 +113,119 @@ export class ContractClient {
       builder.addOperation(invokeOp);
       let transaction = builder.build();
 
-      const rpcServer = new SorobanRpc.Server(stellarClient.getNetwork() === "mainnet" ? "https://soroban-mainnet.stellar.org" : "https://soroban-testnet.stellar.org");
-      transaction = (await rpcServer.prepareTransaction(transaction)) as any;
+      const rpcServer = new rpc.Server(stellarClient.getSorobanRpcUrl());
+      // Simulate first so we can attach Soroban auth + resource footprint/fees.
+      // This is required for contracts that call `require_auth()` (admin/validator gated).
+      const simulation = await simulateTransactionWithRetry(rpcServer, transaction, {
+        contractId,
+        functionName,
+      });
+      if (rpc.Api.isSimulationError(simulation)) {
+        throw new Error(`Simulation error: ${simulation.error}`);
+      }
+      transaction = rpc.assembleTransaction(transaction, simulation)
+        .setTimeout(0)
+        .build();
 
       const keypair = stellarClient.getKeypair();
       if (keypair) {
         transaction.sign(keypair);
       }
 
-      const result = await stellarClient.submitTransaction(transaction);
-      const resultXdr = this.parseTransactionResult(result);
+      // IMPORTANT: Soroban transactions should be submitted to the Soroban RPC,
+      // not Horizon `/transactions` (which can 504 on long-running Soroban TXs).
+      let send: any;
+      let lastSendError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          send = await rpcServer.sendTransaction(transaction);
+          break;
+        } catch (e) {
+          lastSendError = e;
+          const msg = e instanceof Error ? e.message : String(e);
+          logger.warn("Soroban RPC sendTransaction failed (retrying)", {
+            contractId,
+            functionName,
+            attempt,
+            message: msg,
+          });
+          if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, 1500 * attempt));
+          }
+        }
+      }
+      if (!send) {
+        throw lastSendError instanceof Error
+          ? lastSendError
+          : new Error(String(lastSendError));
+      }
+      const txHash = send.hash;
 
-      return {
-        transactionHash: result.hash,
-        result: resultXdr,
-        ledger: result.ledger || 0,
-      };
+      // Poll until the transaction is confirmed.
+      const maxWaitMs = 120_000;
+      const start = Date.now();
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        let status: any;
+        try {
+          status = await rpcServer.getTransaction(txHash);
+        } catch (e) {
+          // Soroban testnet RPC can intermittently reset connections; treat as retryable while within maxWaitMs.
+          const msg = e instanceof Error ? e.message : String(e);
+          logger.warn("Soroban RPC getTransaction failed (retrying)", {
+            contractId,
+            functionName,
+            txHash,
+            message: msg,
+          });
+          if (Date.now() - start > maxWaitMs) {
+            throw e;
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        if (status.status === "SUCCESS") {
+          // For Soroban invocations the real contract return value is carried
+          // in `TransactionMeta.sorobanMeta.returnValue`, which the RPC exposes
+          // directly as `status.returnValue` (already parsed to xdr.ScVal).
+          // The `InvokeHostFunctionResult.success()` arm in `TransactionResult`
+          // is only the hash of emitted diagnostic events — not the return
+          // value. Prefer `returnValue`; fall back to TransactionResult parsing
+          // for non-Soroban paths or older RPC responses.
+          let resultScVal: xdr.ScVal;
+          if (status.returnValue) {
+            resultScVal = status.returnValue as xdr.ScVal;
+          } else {
+            resultScVal = this.parseTransactionResult(status);
+          }
+          return {
+            transactionHash: txHash,
+            result: resultScVal,
+            ledger: status.ledger ?? 0,
+          };
+        }
+        if (status.status === "FAILED") {
+          throw new Error(
+            `Soroban transaction failed: ${status.resultXdr ?? "unknown result"}`,
+          );
+        }
+        if (Date.now() - start > maxWaitMs) {
+          throw new Error(`Soroban transaction timed out after ${maxWaitMs}ms`);
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+
     } catch (error) {
       logger.error("Failed to invoke contract", {
         contractId: options.contractId,
         functionName: options.functionName,
         error,
+        message: error instanceof Error ? error.message : String(error),
       });
-      throw error;
+      throw wrapSorobanInvokeError(error, {
+        contractId: options.contractId,
+        functionName: options.functionName,
+      });
     }
   }
 
@@ -133,7 +253,6 @@ export class ContractClient {
             args,
           }),
         ),
-        auth: [],
       });
 
       const sourceAccountObj = await stellarClient.getAccount(sourceAccount);
@@ -146,18 +265,21 @@ export class ContractClient {
       builder.addOperation(invokeOp);
       const transaction = builder.build();
 
-      const rpcServer = new SorobanRpc.Server(stellarClient.getNetwork() === "mainnet" ? "https://soroban-mainnet.stellar.org" : "https://soroban-testnet.stellar.org");
-      const simulation = await rpcServer.simulateTransaction(transaction);
+      const rpcServer = new rpc.Server(stellarClient.getSorobanRpcUrl());
+      const simulation = await simulateTransactionWithRetry(rpcServer, transaction, {
+        contractId,
+        functionName,
+      });
 
-      if (SorobanRpc.Api.isSimulationError(simulation)) {
+      if (rpc.Api.isSimulationError(simulation)) {
         throw new Error(`Simulation error: ${simulation.error}`);
       }
 
       // If it's a success, it will have a result
-      if (SorobanRpc.Api.isSimulationSuccess(simulation)) {
-          return simulation.result!.retval;
+      if (rpc.Api.isSimulationSuccess(simulation)) {
+        return simulation.result!.retval;
       }
-      
+
       throw new Error("Simulation neither error nor success");
     } catch (error) {
       logger.error("Failed to read contract", {
@@ -174,11 +296,26 @@ export class ContractClient {
    */
   private parseTransactionResult(result: any): xdr.ScVal {
     try {
-      if (result.result_xdr) {
-        const txResult = xdr.TransactionResult.fromXDR(
-          result.result_xdr,
-          "base64",
-        );
+      const rawResultXdr =
+        // Horizon shape
+        result?.result_xdr ??
+        // Soroban RPC `getTransaction` shape
+        result?.resultXdr ??
+        result?.result_xdr;
+
+      if (rawResultXdr) {
+        // Newer stellar-sdk versions may already parse `resultXdr` into an XDR struct.
+        // Normalize into a base64 string for `fromXDR`.
+        const resultXdrBase64: string =
+          typeof rawResultXdr === "string"
+            ? rawResultXdr
+            : typeof rawResultXdr?.toXDR === "function"
+              ? rawResultXdr.toXDR("base64")
+              : Buffer.isBuffer(rawResultXdr)
+                ? rawResultXdr.toString("base64")
+                : String(rawResultXdr);
+
+        const txResult = xdr.TransactionResult.fromXDR(resultXdrBase64, "base64");
         const results = txResult.result().results();
         if (results.length > 0) {
           const tr = results[0].tr();

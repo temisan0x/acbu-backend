@@ -1,9 +1,12 @@
 /**
  * GET /v1/rates - Return current ACBU rates (from AcbuRate and OracleRate).
  * GET /v1/rates/quote - Return equivalent value for a given ACBU amount and optional target currency.
+ * GET /v1/rates/basket - Local amounts per 1 ACBU from basket weights + oracle consensus.
  */
 import { Request, Response, NextFunction } from "express";
 import { prisma } from "../config/database";
+import { basketService } from "../services/basket";
+import { computeSyntheticBasketOneAcbuForBasket } from "../services/oracle/syntheticBasket";
 
 export async function getRates(
   _req: Request,
@@ -102,6 +105,48 @@ export async function getRatesQuote(
       amount_acbu: amount,
       equivalent,
       timestamp: latest.timestamp.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * GET /v1/rates/basket
+ * For V=1 USD notional per ACBU: value share f_c = w_c/W over priced legs, local q_c = (V·f_c)/r_c.
+ */
+export async function getRatesBasket(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const basket = await basketService.getCurrentBasket();
+    const one = await computeSyntheticBasketOneAcbuForBasket(basket, 1);
+    if (!one) {
+      res.status(200).json({
+        usd_notional_per_acbu: 1,
+        legs: [],
+        message: "No priced basket legs; oracle must publish rates first.",
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
+    const usdValueSum = one.legs.reduce((s, leg) => s + leg.usdValueInLeg, 0);
+
+    res.status(200).json({
+      usd_notional_per_acbu: one.usdNotionalPerAcbu,
+      legs: one.legs.map((leg) => ({
+        currency: leg.currency,
+        weight_percent: leg.weightPercent,
+        effective_value_fraction: leg.effectiveValueFraction,
+        usd_per_one_local: leg.usdPerLocal,
+        local_per_one_acbu: leg.localPerOneAcbu,
+        usd_value_in_leg: leg.usdValueInLeg,
+      })),
+      usd_value_sum: usdValueSum,
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     next(error);

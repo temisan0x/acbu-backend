@@ -1,5 +1,5 @@
 import { isValidStellarAddress, assertValidStellarAddress } from "../src/utils/stellar";
-import { Keypair } from "stellar-sdk";
+import { Keypair } from "@stellar/stellar-sdk";
 
 describe("Stellar address validation", () => {
   const validAddress = Keypair.random().publicKey();

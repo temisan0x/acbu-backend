@@ -1,3 +1,5 @@
+import { xdr } from "@stellar/stellar-sdk";
+
 import { prisma } from "../../config/database";
 import { config } from "../../config/env";
 import { getContractAddresses } from "../../config/contracts";
@@ -9,9 +11,59 @@ import { getRabbitMQChannel } from "../../config/rabbitmq";
 import { QUEUES } from "../../config/rabbitmq";
 import { Decimal } from "@prisma/client/runtime/library";
 import { stellarClient } from "../stellar/client";
+import { contractClient, ContractClient } from "../stellar/contractClient";
 
 /** Contract uses 7 decimals (10^7) for reserve amount and value_usd */
 const RESERVE_DECIMALS = 1e7;
+const RESERVE_DECIMALS_BIGINT = 10_000_000n;
+
+/** Build the Soroban `CurrencyCode` tuple-struct ScVal: scvVec([scvVec([scvString(code)])]). */
+function currencyCodeToScVal(code: string): xdr.ScVal {
+  const c = code.trim().toUpperCase();
+  return xdr.ScVal.scvVec([xdr.ScVal.scvVec([xdr.ScVal.scvString(c)])]);
+}
+
+/**
+ * Read authoritative on-chain custody for a currency:
+ * - oracle.get_rate(currency) -> USD per 1 whole unit (7-dec fixed)
+ * - oracle.get_s_token_address(currency) -> SAC contract id
+ * - SAC.balance(minting_contract) -> custody amount held by the minting contract (7-dec atomic)
+ * - valueUsd = (amount * rateUsd) / 1e7 (7-dec atomic USD)
+ */
+async function readOnChainCustody(currency: string): Promise<{
+  amountAtomic: bigint;
+  rateUsdAtomic: bigint;
+  valueUsdAtomic: bigint;
+} | null> {
+  const addresses = getContractAddresses();
+  if (!addresses.oracle || !addresses.minting || !addresses.reserveTracker) {
+    return null;
+  }
+
+  const rateRes = await contractClient.readContract(
+    addresses.oracle,
+    "get_rate",
+    [currencyCodeToScVal(currency)],
+  );
+  const rateUsdAtomic = BigInt(ContractClient.fromScVal(rateRes).toString());
+
+  const sTokenRes = await contractClient.readContract(
+    addresses.oracle,
+    "get_s_token_address",
+    [currencyCodeToScVal(currency)],
+  );
+  const sToken = ContractClient.fromScVal(sTokenRes).toString();
+
+  const balRes = await contractClient.readContract(sToken, "balance", [
+    ContractClient.toScVal(addresses.minting),
+  ]);
+  const amountAtomic = BigInt(ContractClient.fromScVal(balRes).toString());
+
+  const valueUsdAtomic =
+    (amountAtomic * rateUsdAtomic) / RESERVE_DECIMALS_BIGINT;
+
+  return { amountAtomic, rateUsdAtomic, valueUsdAtomic };
+}
 
 const RESERVE_TRACKER_RETRIES = 3;
 const RESERVE_TRACKER_RETRY_DELAY_MS = 1000;
@@ -33,10 +85,6 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
     }
   }
   throw lastError;
-}
-
-function toReserveUnits(n: number): string {
-  return Math.round(n * RESERVE_DECIMALS).toString();
 }
 
 export interface ReserveStatus {
@@ -68,18 +116,58 @@ export class ReserveTracker {
       const currencies = basket.map((e) => e.currency);
       const reserveUpdates = [];
       const fintechRouter = getFintechRouter();
+      const contractAddresses = getContractAddresses();
+      const onChainEnabled = Boolean(
+        contractAddresses.reserveTracker &&
+        contractAddresses.oracle &&
+        contractAddresses.minting,
+      );
 
       for (const currency of currencies) {
         try {
-          const balance = await withRetry(
-            () => fintechRouter.getProvider(currency).getBalance(currency),
-            `getBalance(${currency})`,
-          );
-          const rate = await withRetry(
-            () => this.getCurrencyRate(currency),
-            `getCurrencyRate(${currency})`,
-          );
-          const reserveValueUsd = balance * rate;
+          // Primary source of truth in custodial/demo MVP: on-chain SAC custody on
+          // the minting contract + oracle rate. Fintech partner balances are 0 in
+          // the simulated provider and would incorrectly wipe the on-chain reserves
+          // (causing is_reserve_sufficient -> false on the next mint).
+          let balance = 0;
+          let reserveValueUsd = 0;
+          let onChainAmountAtomic: bigint | null = null;
+          let onChainValueUsdAtomic: bigint | null = null;
+
+          if (onChainEnabled) {
+            try {
+              const custody = await withRetry(
+                () => readOnChainCustody(currency),
+                `readOnChainCustody(${currency})`,
+              );
+              if (custody) {
+                onChainAmountAtomic = custody.amountAtomic;
+                onChainValueUsdAtomic = custody.valueUsdAtomic;
+                balance = Number(custody.amountAtomic) / RESERVE_DECIMALS;
+                reserveValueUsd =
+                  Number(custody.valueUsdAtomic) / RESERVE_DECIMALS;
+              }
+            } catch (e) {
+              logger.warn(
+                "On-chain custody read failed, falling back to fintech provider balance",
+                { currency, error: e },
+              );
+            }
+          }
+
+          if (onChainAmountAtomic === null) {
+            // Fallback path (non-custodial deployments with real fintech partners).
+            balance = await withRetry(
+              () => fintechRouter.getProvider(currency).getBalance(currency),
+              `getBalance(${currency})`,
+            );
+            const rate = await withRetry(
+              () => this.getCurrencyRate(currency),
+              `getCurrencyRate(${currency})`,
+            );
+            reserveValueUsd = balance * rate;
+          }
+
           const targetWeight = await basketService.getTargetWeight(currency);
           const totalReserveValue = await this.getTotalReserveValue();
           const actualWeight =
@@ -99,28 +187,40 @@ export class ReserveTracker {
             },
           });
 
-          // Push same data to on-chain reserve_tracker when contract is configured
-          const contractAddresses = getContractAddresses();
-          if (contractAddresses.reserveTracker) {
-            try {
-              const sourceAccount = stellarClient.getKeypair()?.publicKey();
-              if (!sourceAccount) throw new Error("No source account available");
+          // Push to on-chain reserve_tracker. SKIP when we could not determine a
+          // real custody balance (otherwise we'd overwrite genuine on-chain
+          // reserves with zeros and break future mints).
+          if (onChainEnabled) {
+            const hasRealBalance =
+              onChainAmountAtomic !== null && onChainValueUsdAtomic !== null;
 
-              const txHash = await acbuReserveTrackerService.updateReserve({
-                updater: sourceAccount,
-                currency,
-                amount: toReserveUnits(balance),
-                valueUsd: toReserveUnits(reserveValueUsd),
-              });
-              logger.info("Reserve synced to chain", { currency, txHash });
-            } catch (onChainError) {
+            if (!hasRealBalance) {
               logger.warn(
-                "On-chain reserve update failed (off-chain data saved)",
-                {
-                  currency,
-                  error: onChainError,
-                },
+                "Skipping on-chain reserve update (no authoritative custody balance available; refusing to overwrite with zero)",
+                { currency },
               );
+            } else {
+              try {
+                const sourceAccount = stellarClient.getKeypair()?.publicKey();
+                if (!sourceAccount)
+                  throw new Error("No source account available");
+
+                const txHash = await acbuReserveTrackerService.updateReserve({
+                  updater: sourceAccount,
+                  currency,
+                  amount: onChainAmountAtomic!.toString(),
+                  valueUsd: onChainValueUsdAtomic!.toString(),
+                });
+                logger.info("Reserve synced to chain", { currency, txHash });
+              } catch (onChainError) {
+                logger.warn(
+                  "On-chain reserve update failed (off-chain data saved)",
+                  {
+                    currency,
+                    error: onChainError,
+                  },
+                );
+              }
             }
           }
 
@@ -137,6 +237,10 @@ export class ReserveTracker {
             balance,
             reserveValueUsd,
             actualWeight,
+            source:
+              onChainAmountAtomic !== null
+                ? "on-chain-custody"
+                : "fintech-provider",
           });
         } catch (error) {
           logger.error("Failed to track reserve for currency", {
@@ -284,6 +388,24 @@ export class ReserveTracker {
     }
   }
 
+  /** Circulating ACBU from completed mint/burn rows (off-chain ledger). */
+  private async getTotalAcbuSupplyFromLedger(): Promise<number> {
+    const minted = await prisma.transaction.aggregate({
+      where: { type: "mint", status: "completed" },
+      _sum: { acbuAmount: true },
+    });
+
+    const burned = await prisma.transaction.aggregate({
+      where: { type: "burn", status: "completed" },
+      _sum: { acbuAmountBurned: true },
+    });
+
+    const totalMinted = minted._sum.acbuAmount?.toNumber() || 0;
+    const totalBurned = burned._sum.acbuAmountBurned?.toNumber() || 0;
+
+    return Math.max(0, totalMinted - totalBurned);
+  }
+
   /**
    * Get total ACBU supply from blockchain.
    * Queries Horizon to get the actual amount in circulation, preventing divergence from internal tracking.
@@ -298,20 +420,7 @@ export class ReserveTracker {
         { assetCode },
       );
 
-      const minted = await prisma.transaction.aggregate({
-        where: { type: "mint", status: "completed" },
-        _sum: { acbuAmount: true },
-      });
-
-      const burned = await prisma.transaction.aggregate({
-        where: { type: "burn", status: "completed" },
-        _sum: { acbuAmountBurned: true },
-      });
-
-      const totalMinted = minted._sum.acbuAmount?.toNumber() || 0;
-      const totalBurned = burned._sum.acbuAmountBurned?.toNumber() || 0;
-
-      return totalMinted - totalBurned;
+      return this.getTotalAcbuSupplyFromLedger();
     }
 
     try {
@@ -334,7 +443,7 @@ export class ReserveTracker {
       }
 
       // Assets response contains 'amount' which represents total circulating supply
-      const totalSupply = parseFloat(assets.records[0].amount);
+      const totalSupply = parseFloat((assets.records[0] as any).amount);
       return totalSupply;
     } catch (e) {
       logger.error("Failed to query Stellar for ACBU total supply", {
@@ -369,7 +478,7 @@ export class ReserveTracker {
   }
 
   /**
-   * Get currency exchange rate
+   * Get currency exchange rate from Oracle
    */
   private async getCurrencyRate(currency: string): Promise<number> {
     const latestRate = await prisma.oracleRate.findFirst({
@@ -381,16 +490,7 @@ export class ReserveTracker {
       return latestRate.rateUsd.toNumber();
     }
 
-    // Fallback: use Flutterwave for FX (broad coverage) when oracle rate not available
-    try {
-      const conversion = await getFintechRouter()
-        .getProviderById("flutterwave")
-        .convertCurrency(1, currency, "USD");
-      return conversion.rate;
-    } catch (error) {
-      logger.error("Failed to get currency rate", { currency, error });
-      throw new Error(`Unable to get rate for ${currency}`);
-    }
+    throw new Error(`Oracle rate not available for ${currency}`);
   }
 }
 

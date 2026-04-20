@@ -88,11 +88,12 @@ export class EventListener {
 
         for (const effect of effects.records) {
           // Process contract events
+          const effectAny = effect as any;
           if (
-            effect.type === "contract" ||
-            effect.type.startsWith("contract_")
+            effectAny.type === "contract" ||
+            effectAny.type.startsWith("contract_")
           ) {
-            await this.processEvent(effect);
+            await this.processEvent(effectAny);
           }
 
           // Update cursor

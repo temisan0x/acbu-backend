@@ -11,11 +11,16 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 
 export async function startOracleUpdateScheduler(): Promise<void> {
   if (intervalId) return;
-  try {
-    await fetchAndStoreRates();
-  } catch (e) {
-    logger.error("Oracle initial update failed", e);
-  }
+
+  // Run initial update in background to avoid blocking server startup
+  void (async () => {
+    try {
+      await fetchAndStoreRates();
+    } catch (e) {
+      logger.error("Oracle initial update failed", e);
+    }
+  })();
+
   intervalId = setInterval(async () => {
     try {
       await fetchAndStoreRates();

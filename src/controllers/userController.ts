@@ -2,10 +2,12 @@ import crypto from "crypto";
 import { Response, NextFunction } from "express";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { Keypair } from "stellar-sdk";
+import * as StellarSdk from "@stellar/stellar-sdk";
 import { AuthRequest } from "../middleware/auth";
 import { prisma } from "../config/database";
 import { AppError } from "../middleware/errorHandler";
+import { ensureAccountActivated } from "../services/stellar/activationService";
+import { logger } from "../config/logger";
 
 const WALLET_ENC_SALT_PREFIX = "acbu-wallet-v1:";
 const WALLET_ENC_KEYLEN = 32;
@@ -147,6 +149,125 @@ export async function patchMe(
       const msg = e.errors.map((x) => x.message).join("; ");
       return next(new AppError(msg, 400));
     }
+    next(e);
+  }
+}
+
+/**
+ * PUT /users/me/wallet
+ * Body: { stellar_address }
+ * Overwrites the user's stellar address (e.g. for external wallet connection,
+ * seed import, or a freshly-generated local wallet). The previous wallet's
+ * server-stored encrypted secret is cleared so it can't be used again; the old
+ * on-chain account is not touched (Stellar accounts aren't deletable on chain).
+ */
+export async function putWalletAddress(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const userId = req.apiKey?.userId;
+    if (!userId) throw new AppError("User-scoped API key required", 401);
+
+    const schema = z.object({
+      stellar_address: z
+        .string()
+        .length(56)
+        .regex(/^G/, "Must be a valid Stellar public key"),
+    });
+
+    const body = schema.parse(req.body);
+
+    const previous = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { stellarAddress: true },
+    });
+
+    if (previous?.stellarAddress === body.stellar_address) {
+      res.status(200).json({
+        ok: true,
+        stellar_address: body.stellar_address,
+        changed: false,
+      });
+      return;
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        stellarAddress: body.stellar_address,
+        encryptedStellarSecret: null,
+        keyEncryptionHint: "external",
+      },
+    });
+
+    logger.info("User wallet replaced", {
+      userId,
+      previousStellarAddress: previous?.stellarAddress ?? null,
+      newStellarAddress: body.stellar_address,
+    });
+
+    res.status(200).json({
+      ok: true,
+      stellar_address: body.stellar_address,
+      changed: true,
+      previous_stellar_address: previous?.stellarAddress ?? null,
+    });
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      const msg = e.errors.map((x) => x.message).join("; ");
+      return next(new AppError(msg, 400));
+    }
+    next(e);
+  }
+}
+
+/**
+ * DELETE /users/me/wallet
+ * Fully detach the current wallet from the user's account:
+ *   - clear the stellar address
+ *   - clear any server-stored encrypted secret
+ *   - reset the encryption hint
+ *
+ * Used by Settings → "Remove wallet" so the next sign-in triggers a fresh
+ * wallet setup instead of silently reusing the stale address. The on-chain
+ * account stays alive (Stellar has no delete semantics); users should move
+ * any XLM out first.
+ */
+export async function deleteWallet(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const userId = req.apiKey?.userId;
+    if (!userId) throw new AppError("User-scoped API key required", 401);
+
+    const previous = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { stellarAddress: true },
+    });
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        stellarAddress: null,
+        encryptedStellarSecret: null,
+        keyEncryptionHint: null,
+      },
+    });
+
+    logger.info("User wallet detached", {
+      userId,
+      previousStellarAddress: previous?.stellarAddress ?? null,
+    });
+
+    res.status(200).json({
+      ok: true,
+      previous_stellar_address: previous?.stellarAddress ?? null,
+    });
+  } catch (e) {
     next(e);
   }
 }
@@ -459,7 +580,7 @@ export async function postWalletConfirm(
       throw new AppError("Wallet already confirmed", 400);
     if (!user.stellarAddress) throw new AppError("No wallet to confirm", 400);
     try {
-      const kp = Keypair.fromSecret(body.passphrase);
+      const kp = StellarSdk.Keypair.fromSecret(body.passphrase);
       if (kp.publicKey() !== user.stellarAddress)
         throw new AppError("Passphrase does not match wallet", 400);
     } catch {
@@ -551,6 +672,112 @@ export async function getReceiveQrcode(
       margin: 2,
     });
     res.json({ pay_uri, qr_data_url });
+  } catch (e) {
+    next(e);
+  }
+}
+
+/**
+ * GET /users/me/balance
+ * Returns the user's ACBU balance and other asset balances from Stellar.
+ * If no wallet is linked, returns 0.
+ */
+export async function getMeBalance(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const userId = req.apiKey?.userId;
+    if (!userId) throw new AppError("User-scoped API key required", 401);
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { stellarAddress: true },
+    });
+
+    if (!user || !user.stellarAddress) {
+      res.json({
+        balance: "0",
+        currency: "ACBU",
+        stellar_address: null,
+        balance_stellar: "0",
+        balance_app_ledger: "0",
+        balance_source: "none",
+      });
+      return;
+    }
+
+    const server = new StellarSdk.Horizon.Server(
+      process.env.STELLAR_HORIZON_URL || "https://horizon-testnet.stellar.org",
+    );
+
+    try {
+      const account = await server.loadAccount(user.stellarAddress);
+      const acbuBalance = account.balances.find((b: any) => {
+        if (b.asset_type === "native") return false;
+        return (
+          b.asset_code === (process.env.STELLAR_ACBU_ASSET_CODE || "ACBU") &&
+          b.asset_issuer === process.env.STELLAR_ACBU_ASSET_ISSUER
+        );
+      });
+
+      const stellarNum = acbuBalance ? parseFloat(acbuBalance.balance) : 0;
+      const displayNum = Number.isFinite(stellarNum) ? stellarNum : 0;
+
+      res.json({
+        balance: String(displayNum),
+        currency: "ACBU",
+        stellar_address: user.stellarAddress,
+        balance_stellar: String(displayNum),
+        balance_app_ledger: "0",
+        balance_source: "stellar",
+        balances: account.balances,
+      });
+    } catch (stellarError: any) {
+      if (stellarError.response?.status === 404) {
+        res.json({
+          balance: "0",
+          currency: "ACBU",
+          stellar_address: user.stellarAddress,
+          balance_stellar: "0",
+          balance_app_ledger: "0",
+          balance_source: "none",
+        });
+        return;
+      }
+      throw stellarError;
+    }
+  } catch (e) {
+    next(e);
+  }
+}
+
+/**
+ * POST /users/me/wallet/activate
+ * Ensure the user's Stellar account exists on-chain (testnet activation).
+ */
+export async function postWalletActivate(
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const userId = req.apiKey?.userId;
+    if (!userId) throw new AppError("User-scoped API key required", 401);
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { stellarAddress: true },
+    });
+    if (!user?.stellarAddress) throw new AppError("No wallet address set", 400);
+
+    const result = await ensureAccountActivated(user.stellarAddress);
+    res.status(200).json({
+      ok: true,
+      stellar_address: user.stellarAddress,
+      ...result,
+    });
   } catch (e) {
     next(e);
   }

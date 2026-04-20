@@ -1,24 +1,16 @@
 /**
  * Fintech provider router and types. Import from here so the router is wired with all providers.
  */
-import { config } from "../../config/env";
-import { flutterwaveProvider } from "../flutterwave/client";
-import { PaystackClient } from "../paystack/client";
-import { MTNMoMoClient } from "../mtn-momo/client";
+import { simulatedFintechProvider } from "./simulated";
 import { FintechProviderRouter, setFintechRouter } from "./router";
-import type { FintechProviderId } from "./types";
 
-const currencyProviders = (config.fintech?.currencyProviders ?? {}) as Record<
-  string,
-  FintechProviderId
->;
-const router = new FintechProviderRouter(currencyProviders);
-router.register("flutterwave", flutterwaveProvider);
-router.register(
-  "paystack",
-  new PaystackClient({ fxFallback: flutterwaveProvider }),
-);
-router.register("mtn_momo", new MTNMoMoClient());
+const router = new FintechProviderRouter({});
+// Register simulated provider for all potential IDs to override any legacy config
+router.register("simulated", simulatedFintechProvider);
+router.register("flutterwave", simulatedFintechProvider);
+router.register("paystack", simulatedFintechProvider);
+router.register("mtn_momo", simulatedFintechProvider);
+
 setFintechRouter(router);
 
 export {

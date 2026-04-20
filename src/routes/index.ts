@@ -26,6 +26,8 @@ import retailFundsRoutes from "./retailFundsRoutes";
 import businessFundsRoutes from "./businessFundsRoutes";
 import governmentFundsRoutes from "./governmentFundsRoutes";
 import investmentRoutes from "./investmentRoutes";
+import fiatRoutes from "./fiatRoutes";
+import configRoutes from "./configRoutes";
 
 const router: ReturnType<typeof Router> = Router();
 
@@ -70,6 +72,8 @@ router.use("/retail", retailFundsRoutes);
 router.use("/business", businessFundsRoutes);
 router.use("/government", governmentFundsRoutes);
 router.use("/investment", investmentRoutes);
+router.use("/fiat", fiatRoutes);
+router.use("/config", configRoutes);
 router.use("/webhooks", webhookRoutes);
 
 export default router;

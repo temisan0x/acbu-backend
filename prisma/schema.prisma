@@ -156,6 +156,7 @@ model OracleRate {
   medianRate          Decimal   @map("median_rate") @db.Decimal(20, 8)
   twap24h             Decimal?  @map("twap_24h") @db.Decimal(20, 8)
   validatorSignatures Json?     @map("validator_signatures")
+  rawValues           Json?     @map("raw_values") @db.JsonB
   timestamp           DateTime  @default(now()) @db.Timestamp
 
   @@unique([currency, timestamp])
@@ -506,3 +507,4 @@ model KycValidatorReward {
   @@index([status], name: "idx_kyc_validator_reward_status")
   @@map("kyc_validator_rewards")
 }
+
