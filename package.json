@@ -21,7 +21,7 @@
     "backfill:org-limits": "ts-node prisma/backfillOrgTransactionContext.ts",
     "stellar:create-wallet": "ts-node scripts/create-stellar-wallet.ts",
     "compute:basket-weights": "ts-node scripts/compute-basket-weights.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate && tsc"
   },
   "keywords": [
     "acbu",
