@@ -413,7 +413,7 @@ export async function simulateOffRamp(
   userId: string,
   currency: string,
   acbuAmount: number,
-  _transactionId?: string,
+  blockchainTxHash?: string,
 ): Promise<{
   fiatAmount: number;
   acbuAmount: number;
@@ -450,23 +450,27 @@ export async function simulateOffRamp(
     throw new Error("Burning contract not configured");
   }
 
-  const sourceAccount = stellarClient.getKeypair()?.publicKey();
-  if (!sourceAccount) {
-    throw new Error("No Stellar source account (STELLAR_SECRET_KEY)");
+  let txHash = blockchainTxHash;
+  if (!txHash) {
+    const sourceAccount = stellarClient.getKeypair()?.publicKey();
+    if (!sourceAccount) {
+      throw new Error("No Stellar source account (STELLAR_SECRET_KEY)");
+    }
+
+    const acbuAmount7 = Math.round(acbuAmount * DECIMALS_7).toString();
+
+    const result = await acbuBurningService.redeemSingle({
+      user: sourceAccount,
+      recipient: sourceAccount,
+      acbuAmount: acbuAmount7,
+      currency,
+    });
+    txHash = result.transactionHash;
   }
-
-  const acbuAmount7 = Math.round(acbuAmount * DECIMALS_7).toString();
-
-  const result = await acbuBurningService.redeemSingle({
-    user: sourceAccount,
-    recipient: sourceAccount,
-    acbuAmount: acbuAmount7,
-    currency,
-  });
 
   return {
     fiatAmount,
     acbuAmount,
-    transactionId: result.transactionHash,
+    transactionId: txHash,
   };
 }

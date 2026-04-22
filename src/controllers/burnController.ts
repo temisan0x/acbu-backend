@@ -36,6 +36,10 @@ const bodySchema = z.object({
     ),
   currency: z.string().length(3).toUpperCase(),
   recipient_account: recipientAccountSchema,
+  blockchain_tx_hash: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/, "blockchain_tx_hash must be a 64-char hex hash")
+    .optional(),
 });
 
 export async function burnAcbu(
@@ -51,11 +55,30 @@ export async function burnAcbu(
         .json({ error: "Invalid request", details: parsed.error.flatten() });
       return;
     }
-    const { acbu_amount, currency, recipient_account } = parsed.data;
+    const { acbu_amount, currency, recipient_account, blockchain_tx_hash } =
+      parsed.data;
     const acbuNum = Number(acbu_amount);
     const burnFeeBps = await getBurnFeeBps(currency);
     const feeAcbu = (acbuNum * burnFeeBps) / 10000;
     const acbuAmount7 = Math.round(acbuNum * DECIMALS_7).toString();
+
+    const acbuRateRecord = await prisma.acbuRate.findFirst({
+      orderBy: { timestamp: "desc" },
+    });
+    if (!acbuRateRecord) {
+      throw new Error("ACBU rates not available");
+    }
+    const rateKey =
+      `acbu${currency.charAt(0).toUpperCase() + currency.slice(1).toLowerCase()}` as keyof typeof acbuRateRecord;
+    const acbuPerLocal = acbuRateRecord[rateKey];
+    if (
+      !acbuPerLocal ||
+      typeof acbuPerLocal !== "object" ||
+      !("toNumber" in acbuPerLocal)
+    ) {
+      throw new Error(`Rate not found for currency ${currency}`);
+    }
+    const localNum = acbuNum * acbuPerLocal.toNumber();
 
     // SECURITY: Always enforce circuit breaker and withdrawal limits
     // Previously these checks were skipped when req.audience was undefined,
@@ -87,6 +110,7 @@ export async function burnAcbu(
         status: "pending",
         acbuAmountBurned: new Decimal(acbuNum),
         localCurrency: currency,
+        localAmount: new Decimal(localNum),
         recipientAccount: recipient_account as object,
         fee: new Decimal(feeAcbu),
         rateSnapshot: {
@@ -107,6 +131,27 @@ export async function burnAcbu(
 
     const addresses = getContractAddresses();
     if (addresses.burning) {
+      if (blockchain_tx_hash) {
+        await prisma.transaction.update({
+          where: { id: tx.id },
+          data: {
+            status: "processing",
+            blockchainTxHash: blockchain_tx_hash,
+          },
+        });
+        res.status(200).json({
+          transaction_id: tx.id,
+          acbu_amount: String(acbuNum),
+          local_amount: String(localNum),
+          currency,
+          fee: String(feeAcbu),
+          rate: { acbu_ngn: null, timestamp: new Date().toISOString() },
+          status: "processing",
+          estimated_completion: null,
+          blockchain_tx_hash,
+        });
+        return;
+      }
       try {
         const sourceAccount = stellarClient.getKeypair()?.publicKey();
         if (!sourceAccount) throw new Error("No source account available");
@@ -117,19 +162,19 @@ export async function burnAcbu(
           acbuAmount: acbuAmount7,
           currency,
         });
-        const localNum = Number(result.localAmount) / 100; // contract may use 2 decimals for fiat
+        const localNumFromContract = Number(result.localAmount) / 100; // contract may use 2 decimals for fiat
         await prisma.transaction.update({
           where: { id: tx.id },
           data: {
             status: "processing",
-            localAmount: new Decimal(localNum),
+            localAmount: new Decimal(localNumFromContract),
             blockchainTxHash: result.transactionHash,
           },
         });
         res.status(200).json({
           transaction_id: tx.id,
           acbu_amount: String(acbuNum),
-          local_amount: String(localNum),
+          local_amount: String(localNumFromContract),
           currency,
           fee: String(feeAcbu),
           rate: { acbu_ngn: null, timestamp: new Date().toISOString() },

@@ -109,6 +109,23 @@ export async function createTransfer(
   let status = "pending";
   let blockchainTxHash: string | null = null;
 
+  if (options?.submittedBlockchainTxHash) {
+    blockchainTxHash = options.submittedBlockchainTxHash;
+    status = "completed";
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "completed",
+        blockchainTxHash,
+        completedAt: new Date(),
+      },
+    });
+    return {
+      transactionId: tx.id,
+      status,
+    };
+  }
+
   const getKey = options?.getSenderSigningKey;
   if (getKey) {
     const secretKey = await getKey(senderUserId);

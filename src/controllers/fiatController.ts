@@ -23,6 +23,15 @@ const onRampSchema = z.object({
   passcode: z.string().optional(),
 });
 
+const offRampSchema = z.object({
+  currency: z.string().min(3).max(3),
+  amount: z.number().positive(),
+  blockchain_tx_hash: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/, "blockchain_tx_hash must be a 64-char hex hash")
+    .optional(),
+});
+
 function serializeFiatAccount(acc: FiatAccountView) {
   return {
     id: acc.id,
@@ -144,11 +153,12 @@ export async function postOffRamp(
     const userId = req.apiKey?.userId;
     if (!userId) return next(new AppError("User not found in API key", 401));
 
-    const body = onRampSchema.parse(req.body);
+    const body = offRampSchema.parse(req.body);
     const result = await simulateOffRamp(
       userId,
       body.currency.toUpperCase(),
       body.amount,
+      body.blockchain_tx_hash,
     );
 
     res.status(200).json(result);

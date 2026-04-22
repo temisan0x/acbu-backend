@@ -9,6 +9,7 @@
  */
 import { Request, Response, NextFunction } from "express";
 import { stellarClient } from "../services/stellar/client";
+import { getContractAddresses } from "../config/contracts";
 
 export async function getPublicAssetsConfig(
   _req: Request,
@@ -32,6 +33,10 @@ export async function getPublicAssetsConfig(
       stellar: {
         network_passphrase: stellarClient.getNetworkPassphrase(),
         horizon_url: stellarClient.getHorizonUrl?.() ?? null,
+        soroban_rpc_url: stellarClient.getSorobanRpcUrl?.() ?? null,
+      },
+      contracts: {
+        burning: getContractAddresses().burning || null,
       },
     });
   } catch (e) {

@@ -14,6 +14,10 @@ const createTransferSchema = z.object({
       message:
         "amount_acbu must be a positive number with up to 7 decimal places",
     }),
+  blockchain_tx_hash: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/, "blockchain_tx_hash must be a 64-char hex hash")
+    .optional(),
 });
 
 /**
@@ -38,7 +42,10 @@ export async function postTransfers(
         to: body.to.trim(),
         amountAcbu: body.amount_acbu.trim(),
       },
-      // getSenderSigningKey not passed: tx stays pending until key/worker is wired
+      {
+        // Legacy behavior: without hash, tx stays pending until key/worker is wired.
+        submittedBlockchainTxHash: body.blockchain_tx_hash,
+      },
     );
     res.status(201).json({
       transaction_id: result.transactionId,

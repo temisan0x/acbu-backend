@@ -12,6 +12,8 @@ export interface CreateTransferParams {
 export interface CreateTransferOptions {
   /** When provided and returns a key, the service submits the Stellar payment. Otherwise tx stays pending. */
   getSenderSigningKey?: (userId: string) => Promise<string | null>;
+  /** When provided, transfer is recorded as already submitted by the client. */
+  submittedBlockchainTxHash?: string;
 }
 
 export interface CreateTransferResult {
