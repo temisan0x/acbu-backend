@@ -55,6 +55,7 @@ model User {
   contactOf                UserContact[]              @relation("ContactOf")
   contacts                 UserContact[]              @relation("UserContacts")
   passkeys                 UserPasskey[]
+  userDevices              UserDevice[]
   organization             Organization?              @relation("UserOrganization", fields: [organizationId], references: [id])
 
   @@index([stellarAddress], map: "idx_stellar_address")
@@ -476,5 +477,42 @@ model KycValidatorReward {
   @@index([applicationId], map: "idx_kyc_validator_reward_application_id")
   @@index([status], map: "idx_kyc_validator_reward_status")
   @@map("kyc_validator_rewards")
+}
+
+model UserDevice {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
+  fingerprint          String    @db.VarChar(255)
+  userAgent            String?   @db.VarChar(512)
+  lastIp               String?   @db.VarChar(45)
+  isTrusted            Boolean   @default(false) @map("is_trusted")
+  trustedAt            DateTime? @map("trusted_at") @db.Timestamp(6)
+  verificationAttempts Int      @default(0) @map("verification_attempts")
+  lastSeenAt           DateTime  @default(now()) @map("last_seen_at") @db.Timestamp(6)
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fingerprint])
+  @@index([userId], map: "idx_user_device_user_id")
+  @@index([fingerprint], map: "idx_user_device_fingerprint")
+  @@index([isTrusted], map: "idx_user_device_is_trusted")
+  @@map("user_devices")
+}
+
+model RecoveryAttempt {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  identifier  String   @db.VarChar(255)
+  ip          String?  @db.VarChar(45)
+  userAgent  String?  @db.VarChar(512)
+  success     Boolean  @default(false)
+  reason      String?  @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@index([userId], map: "idx_recovery_attempt_user_id")
+  @@index([identifier], map: "idx_recovery_attempt_identifier")
+  @@index([createdAt], map: "idx_recovery_attempt_created_at")
+  @@index([success], map: "idx_recovery_attempt_success")
+  @@map("recovery_attempts")
 }
 
