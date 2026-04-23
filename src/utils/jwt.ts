@@ -2,7 +2,7 @@
  * JWT helpers for 2FA challenge tokens.
  * Challenge tokens use dedicated config and include aud/iss claims for purpose binding.
  * These tokens CANNOT be used for API access and have strict expiration (5m).
- * 
+ *
  * Security model:
  * - Challenge tokens have aud: "2fa_challenge" and iss: "acbu/auth"
  * - API session tokens have aud: "api_session" and are signed with a different (optional) secret
@@ -31,11 +31,8 @@ export interface ChallengePayload {
  * In production, should use a separate, rotated secret.
  */
 function getChallengeSecret(): string {
-  const secret = 
-    process.env.CHALLENGE_TOKEN_SECRET || 
-    process.env.JWT_SECRET || 
-    config.jwtSecret;
-  
+  const secret = config.challengeTokenSecret;
+
   if (!secret) {
     throw new Error("CHALLENGE_TOKEN_SECRET or JWT_SECRET is required");
   }
@@ -48,7 +45,7 @@ function getChallengeSecret(): string {
  */
 export function signChallengeToken(userId: string): string {
   const secret = getChallengeSecret();
-  
+
   const payload: ChallengePayload = {
     userId,
     aud: CHALLENGE_AUDIENCE,
@@ -68,7 +65,7 @@ export function signChallengeToken(userId: string): string {
  */
 export function verifyChallengeToken(token: string): ChallengePayload {
   const secret = getChallengeSecret();
-  
+
   try {
     const decoded = jwt.verify(token, secret, {
       audience: CHALLENGE_AUDIENCE,
@@ -108,14 +105,9 @@ export function verifyChallengeToken(token: string): ChallengePayload {
  * Strictly reject challenge tokens when trying to use them as API keys.
  * This prevents accidental or malicious reuse across flows.
  */
-export function rejectIfChallengeToken(
-  decoded: Record<string, unknown>,
-): void {
+export function rejectIfChallengeToken(decoded: Record<string, unknown>): void {
   if (decoded.aud === CHALLENGE_AUDIENCE && decoded.iss === CHALLENGE_ISSUER) {
-    logger.error("Attempted to use 2FA challenge token for API access", {
-      userId: decoded.userId,
-      jti: decoded.jti,
-    });
+    logger.error("Attempted to use 2FA challenge token for API access");
     throw new Error("Challenge tokens cannot be used for API access");
   }
 }

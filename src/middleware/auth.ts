@@ -89,19 +89,14 @@ function rejectIfJwtToken(token: string): void {
       if (decoded) {
         // Check if this is a challenge token (has 2fa_challenge audience)
         if (decoded.aud === "2fa_challenge" && decoded.iss === "acbu/auth") {
-          logger.error("Attempted to use 2FA challenge token for API access", {
-            userId: decoded.userId,
-          });
+          logger.error("Attempted to use 2FA challenge token for API access");
           throw new AppError(
             "Challenge tokens cannot be used for API access",
             401,
           );
         }
         // Reject any JWT-like token that isn't a standard API key
-        logger.warn("Non-API-key JWT token rejected for API access", {
-          aud: decoded.aud,
-          iss: decoded.iss,
-        });
+        logger.warn("Non-API-key JWT token rejected for API access");
         throw new AppError("Invalid credentials format", 401);
       }
     } catch (err) {
