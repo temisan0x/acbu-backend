@@ -13,7 +13,7 @@ import { prisma } from "../../config/database";
 import { stellarClient } from "../stellar/client";
 import { getBaseFee } from "../stellar/feeManager";
 import { resolveRecipientToStellarAddress } from "../recipient/recipientResolver";
-import { logger } from "../../config/logger";
+import { logger, logFinancialEvent } from "../../config/logger";
 import type {
   CreateTransferParams,
   CreateTransferOptions,
@@ -106,6 +106,23 @@ export async function createTransfer(
     },
   });
 
+  const correlationId = options?.correlationId ?? crypto.randomUUID();
+  const amountInSmallestUnit = Math.round(Number(amount) * 100);
+
+  // Emit transfer.initiated immediately after the Transaction row is created
+  logFinancialEvent({
+    event: "transfer.initiated",
+    status: "pending",
+    transactionId: tx.id,
+    idempotencyKey: tx.id,
+    userId: senderUserId,
+    accountId: sender.stellarAddress ?? senderUserId,
+    destinationId: recipientAddress,
+    amount: amountInSmallestUnit,
+    currency: "ACBU",
+    correlationId,
+  });
+
   let status = "pending";
   let blockchainTxHash: string | null = null;
 
@@ -119,6 +136,20 @@ export async function createTransfer(
         blockchainTxHash,
         completedAt: new Date(),
       },
+    });
+    // Emit transfer.completed for pre-submitted hash path
+    logFinancialEvent({
+      event: "transfer.completed",
+      status: "success",
+      transactionId: tx.id,
+      idempotencyKey: tx.id,
+      userId: senderUserId,
+      accountId: sender.stellarAddress ?? senderUserId,
+      destinationId: recipientAddress,
+      amount: amountInSmallestUnit,
+      currency: "ACBU",
+      correlationId,
+      providerRef: blockchainTxHash,
     });
     return {
       transactionId: tx.id,
@@ -152,6 +183,20 @@ export async function createTransfer(
           blockchainTxHash,
           senderUserId,
         });
+        // Emit transfer.completed on successful Stellar submission
+        logFinancialEvent({
+          event: "transfer.completed",
+          status: "success",
+          transactionId: tx.id,
+          idempotencyKey: tx.id,
+          userId: senderUserId,
+          accountId: sender.stellarAddress ?? senderUserId,
+          destinationId: recipientAddress,
+          amount: amountInSmallestUnit,
+          currency: "ACBU",
+          correlationId,
+          providerRef: blockchainTxHash,
+        });
       } catch (err) {
         logger.error("Transfer Stellar submission failed", {
           transactionId: tx.id,
@@ -162,6 +207,20 @@ export async function createTransfer(
         await prisma.transaction.update({
           where: { id: tx.id },
           data: { status: "failed" },
+        });
+        // Emit transfer.failed on Stellar submission failure
+        logFinancialEvent({
+          event: "transfer.failed",
+          status: "failed",
+          transactionId: tx.id,
+          idempotencyKey: tx.id,
+          userId: senderUserId,
+          accountId: sender.stellarAddress ?? senderUserId,
+          destinationId: recipientAddress,
+          amount: amountInSmallestUnit,
+          currency: "ACBU",
+          correlationId,
+          errorMessage: err instanceof Error ? err.message : String(err),
         });
       }
     }
