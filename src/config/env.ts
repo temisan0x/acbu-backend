@@ -329,4 +329,36 @@ export const config = {
 
   // CORS
   corsOrigin: process.env.CORS_ORIGIN?.split(",") || ["*"],
+
+  // S3 / KYC document storage (B-062)
+  s3: {
+    bucket: process.env.AWS_S3_KYC_BUCKET || "",
+    region: process.env.AWS_REGION || process.env.AWS_S3_REGION || "us-east-1",
+    /** Optional: override endpoint for local MinIO / S3-compatible stores. */
+    endpoint: process.env.AWS_S3_ENDPOINT || "",
+    /** Explicit credentials — falls back to IAM role / env chain if not set. */
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+    /**
+     * Upload URL TTL in seconds. Default 900 (15 min).
+     * Keep short to limit the window for presigned URL abuse.
+     */
+    uploadUrlTtlSeconds: parseInt(
+      process.env.S3_UPLOAD_URL_TTL_SECONDS || "900",
+      10,
+    ),
+    /**
+     * Download URL TTL in seconds. Default 300 (5 min).
+     * Shorter than upload — read-once pattern recommended.
+     */
+    downloadUrlTtlSeconds: parseInt(
+      process.env.S3_DOWNLOAD_URL_TTL_SECONDS || "300",
+      10,
+    ),
+    /**
+     * Shared secret used to authenticate the virus-scan webhook callback.
+     * Must be set in production.
+     */
+    scanWebhookSecret: process.env.S3_SCAN_WEBHOOK_SECRET || "",
+  },
 };

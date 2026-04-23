@@ -423,6 +423,8 @@ model KycDocument {
   storageRef    String         @map("storage_ref") @db.VarChar(512)
   checksum      String?        @db.VarChar(64)
   mimeType      String?        @map("mime_type") @db.VarChar(100)
+  fileSizeBytes Int?           @map("file_size_bytes")
+  scanStatus    String         @default("pending") @map("scan_status") @db.VarChar(20)
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamp(6)
   application   KycApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
 
