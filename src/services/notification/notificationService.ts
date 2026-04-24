@@ -15,8 +15,9 @@ export async function sendEmail(
 ): Promise<void> {
   if (cfg.emailProvider === "log") {
     logger.info("NotificationService (email log)", {
-      to: to ? "***" : undefined,
+      to: process.env.NODE_ENV === "production" ? (to ? "***" : undefined) : to,
       subject,
+      body,
     });
     return;
   }
