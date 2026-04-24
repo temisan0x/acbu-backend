@@ -177,6 +177,7 @@ export async function getInvestmentWithdrawRequests(
 export async function publishInvestmentWithdrawalReady(
   userId: string | null,
   amountAcbu: number,
+  organizationId?: string | null,
 ): Promise<void> {
   const ch = getRabbitMQChannel();
   await ch.assertQueue(QUEUES.NOTIFICATIONS, { durable: true });
@@ -186,6 +187,7 @@ export async function publishInvestmentWithdrawalReady(
       JSON.stringify({
         type: "investment_withdrawal_ready",
         userId,
+        organizationId: organizationId ?? null,
         amountAcbu,
         timestamp: new Date().toISOString(),
       }),
