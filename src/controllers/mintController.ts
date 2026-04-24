@@ -118,12 +118,14 @@ export async function mintFromUsdcInternal(
   usdcAmount: number,
   walletAddress: string,
   userId?: string,
+  organizationId?: string,
 ): Promise<{ transactionId: string; acbuAmount: number }> {
   const feeUsdc = (usdcAmount * MINT_FEE_BPS) / 10000;
   const usdcAmount7 = Math.round(usdcAmount * DECIMALS_7).toString();
   const tx = await prisma.transaction.create({
     data: {
       userId: userId ?? undefined,
+      organizationId: organizationId ?? undefined,
       type: "mint",
       status: "pending",
       usdcAmount: new Decimal(usdcAmount),
@@ -268,7 +270,8 @@ export async function depositFromBasketCurrency(
     );
     const tx = await prisma.transaction.create({
       data: {
-        userId,
+        userId: req.apiKey?.userId ?? undefined,
+        organizationId: req.apiKey?.organizationId ?? undefined,
         type: "mint",
         status: "pending",
         localCurrency: currency,
@@ -276,7 +279,6 @@ export async function depositFromBasketCurrency(
         rateSnapshot: {
           deposit_currency: currency,
           amount: amountNum,
-          organizationId: req.apiKey?.organizationId ?? null,
           timestamp: new Date().toISOString(),
         },
       },
