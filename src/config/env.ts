@@ -14,6 +14,7 @@ const envSchema = z.object({
   PRISMA_ACCELERATE_URL: z.string().optional(),
   JWT_EXPIRES_IN: z.string().default("7d"),
   API_KEY_SALT: z.string().default(""),
+  ADMIN_API_KEY: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
 });
@@ -49,6 +50,7 @@ export const config = {
   jwtSecret: env.JWT_SECRET,
   jwtExpiresIn: env.JWT_EXPIRES_IN,
   apiKeySalt: env.API_KEY_SALT,
+  adminApiKey: env.ADMIN_API_KEY,
   rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
   rateLimitMaxRequests: env.RATE_LIMIT_MAX_REQUESTS,
 

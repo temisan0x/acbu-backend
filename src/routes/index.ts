@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { config } from "../config/env";
 import { deepHealthCheck } from "../controllers/healthController";
+import { requireAdminApiKey } from "../middleware/adminAuth";
 import reserveRoutes from "./reserveRoutes";
 import recipientRoutes from "./recipientRoutes";
 import transferRoutes from "./transferRoutes";
@@ -42,10 +43,10 @@ router.get("/health", (_req, res) => {
 });
 
 // Deep health check — probes PostgreSQL, MongoDB, RabbitMQ; returns 503 if any are down
-router.get("/health/deep", deepHealthCheck);
+router.get("/health/deep", requireAdminApiKey, deepHealthCheck);
 
 // Extended health / metrics (reserve ratio when available; for monitoring dashboards)
-router.get("/health/metrics", deepHealthCheck);
+router.get("/health/metrics", requireAdminApiKey, deepHealthCheck);
 
 // API routes
 router.use("/auth", authRoutes);
