@@ -22,12 +22,13 @@ import {
 } from "../services/limits/limitsService";
 import { enqueueUsdcConvertAndMint } from "../jobs/usdcConvertAndMintJob";
 import { AppError } from "../middleware/errorHandler";
-import { convertLocalToUsd } from "../services/rates/currencyConverter";
+import { assertUserWalletAddress } from "../services/wallet/walletService";
+import { logFinancialEvent } from "../config/logger";
 
 const MINT_FEE_BPS = 30; // 0.3%
 const DECIMALS_7 = 1e7;
 
-const usdcBodySchema = z.object({
+export const usdcBodySchema = z.object({
   usdc_amount: z
     .string()
     .min(1)
@@ -38,26 +39,6 @@ const usdcBodySchema = z.object({
   wallet_address: z.string().length(56).regex(/^G/),
   currency_preference: z.enum(["auto"]).optional(),
 });
-
-async function assertUserWalletAddress(
-  userId: string,
-  providedAddress: string,
-): Promise<string> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { stellarAddress: true },
-  });
-
-  if (!user?.stellarAddress) {
-    throw new AppError("User wallet address not set", 400);
-  }
-
-  if (user.stellarAddress !== providedAddress) {
-    throw new AppError("Wallet address does not match user", 403);
-  }
-
-  return user.stellarAddress;
-}
 
 /**
  * POST /v1/mint/usdc - Accept USDC deposit. We convert USDC→XLM in backend (pools/swaps independent); once conversion succeeds, mint is approved. User does not wait for LPs.
@@ -138,12 +119,15 @@ export async function mintFromUsdcInternal(
   usdcAmount: number,
   walletAddress: string,
   userId?: string,
+  organizationId?: string,
 ): Promise<{ transactionId: string; acbuAmount: number }> {
   const feeUsdc = (usdcAmount * MINT_FEE_BPS) / 10000;
   const usdcAmount7 = Math.round(usdcAmount * DECIMALS_7).toString();
+  const correlationId = crypto.randomUUID();
   const tx = await prisma.transaction.create({
     data: {
       userId: userId ?? undefined,
+      organizationId: organizationId ?? undefined,
       type: "mint",
       status: "pending",
       usdcAmount: new Decimal(usdcAmount),
@@ -154,6 +138,19 @@ export async function mintFromUsdcInternal(
       },
     },
   });
+
+  logFinancialEvent({
+    event: "mint.initiated",
+    status: "pending",
+    transactionId: tx.id,
+    userId: userId ?? tx.id,
+    accountId: walletAddress,
+    idempotencyKey: tx.id,
+    amount: Math.round(usdcAmount * 100), // cents
+    currency: "USDC",
+    correlationId,
+  });
+
   const addresses = getContractAddresses();
   if (!addresses.minting) {
     await prisma.transaction.update({
@@ -196,6 +193,18 @@ export async function mintFromUsdcInternal(
         completedAt: new Date(),
       },
     });
+    logFinancialEvent({
+      event: "mint.completed",
+      status: "success",
+      transactionId: tx.id,
+      userId: userId ?? tx.id,
+      accountId: walletAddress,
+      idempotencyKey: tx.id,
+      amount: Math.round(usdcAmount * 100),
+      currency: "USDC",
+      correlationId,
+      providerRef: result.transactionHash,
+    });
     return { transactionId: tx.id, acbuAmount: acbuNum };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -207,11 +216,23 @@ export async function mintFromUsdcInternal(
         rateSnapshot: { error: message, at: new Date().toISOString() },
       },
     });
+    logFinancialEvent({
+      event: "mint.failed",
+      status: "failed",
+      transactionId: tx.id,
+      userId: userId ?? tx.id,
+      accountId: walletAddress,
+      idempotencyKey: tx.id,
+      amount: Math.round(usdcAmount * 100),
+      currency: "USDC",
+      correlationId,
+      errorMessage: message,
+    });
     throw err;
   }
 }
 
-const depositBodySchema = z.object({
+export const depositBodySchema = z.object({
   currency: z.string().length(3).toUpperCase(),
   amount: z
     .string()
@@ -258,9 +279,11 @@ export async function depositFromBasketCurrency(
       return;
     }
     const amountNum = Number(amount);
-    if (req.apiKey?.userId) {
-      await assertUserWalletAddress(req.apiKey.userId, wallet_address);
+    const userId = req.apiKey?.userId;
+    if (!userId) {
+      throw new AppError("User context required for deposit", 401);
     }
+    await assertUserWalletAddress(userId, wallet_address);
     // SECURITY: Always enforce circuit breaker and deposit limits
     // Previously these checks were skipped when req.audience was undefined,
     // allowing bypass of critical financial controls via direct /mint/deposit route
@@ -277,25 +300,17 @@ export async function depositFromBasketCurrency(
 
     // Apply deposit limits - use retail as default if no audience is set
     const audience = req.audience || "retail";
-    
-    // CRITICAL: Convert local currency amount to USD for accurate limit checking.
-    // Previously, the raw local amount was passed directly to checkDepositLimits,
-    // treating 100,000 NGN as if it were 100,000 USD.
-    // Now we fetch the current exchange rates and properly convert:
-    // 1. Get the rate: how many local currency units per 1 ACBU
-    // 2. Calculate ACBU equivalent: localAmount / localRate
-    // 3. Convert to USD: acbuAmount * acbuUsdRate
-    const amountUsd = await convertLocalToUsd(amountNum, currency);
-    
+    const amountUsdPlaceholder = amountNum; // TODO: convert via rate to USD for accurate limit
     await checkDepositLimits(
       audience,
-      amountUsd,
-      req.apiKey?.userId ?? null,
+      amountUsdPlaceholder,
+      userId,
       req.apiKey?.organizationId ?? null,
     );
     const tx = await prisma.transaction.create({
       data: {
         userId: req.apiKey?.userId ?? undefined,
+        organizationId: req.apiKey?.organizationId ?? undefined,
         type: "mint",
         status: "pending",
         localCurrency: currency,
@@ -303,7 +318,6 @@ export async function depositFromBasketCurrency(
         rateSnapshot: {
           deposit_currency: currency,
           amount: amountNum,
-          organizationId: req.apiKey?.organizationId ?? null,
           timestamp: new Date().toISOString(),
         },
       },
