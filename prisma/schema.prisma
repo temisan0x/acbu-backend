@@ -541,65 +541,20 @@ model RecoveryAttempt {
   @@map("recovery_attempts")
 }
 
-model SalarySchedule {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String?   @map("organization_id") @db.Uuid
-  userId         String    @map("user_id") @db.Uuid
-  name           String    @db.VarChar(255)
-  cron           String    @db.VarChar(50)
-  amountConfig   Json      @map("amount_config")
-  currency       String    @default("ACBU") @db.VarChar(10)
-  status         String    @default("active") @db.VarChar(20)
-  nextRunAt      DateTime  @map("next_run_at") @db.Timestamp(6)
-  lastRunAt      DateTime? @map("last_run_at") @db.Timestamp(6)
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
+model InvestmentStrategy {
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String   @unique @db.VarChar(100)
+  description          String?  @db.Text
+  status               String   @default("active") @db.VarChar(20) // 'active' | 'paused' | 'deprecated'
+  policyLimitUsd       Decimal  @map("policy_limit_usd") @db.Decimal(20, 2)
+  deployedNotionalUsd  Decimal  @default(0) @map("deployed_notional_usd") @db.Decimal(20, 2)
+  targetApyBps         Int?     @map("target_apy_bps")
+  riskTier             String   @default("medium") @map("risk_tier") @db.VarChar(20) // 'low' | 'medium' | 'high'
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
 
-  organization Organization? @relation(fields: [organizationId], references: [id])
-  user         User          @relation(fields: [userId], references: [id])
-
-  @@index([organizationId], map: "idx_salary_schedule_org_id")
-  @@index([userId], map: "idx_salary_schedule_user_id")
-  @@index([status], map: "idx_salary_schedule_status")
-  @@index([nextRunAt], map: "idx_salary_schedule_next_run_at")
-  @@map("salary_schedules")
+  @@index([status], map: "idx_investment_strategies_status")
+  @@index([riskTier], map: "idx_investment_strategies_risk_tier")
+  @@map("investment_strategies")
 }
 
-model SalaryItem {
-  id               String   @id @default(uuid()) @db.Uuid
-  salaryBatchId    String   @map("salary_batch_id") @db.Uuid
-  transactionId    String?  @unique @map("transaction_id") @db.Uuid
-  amount           Decimal  @db.Decimal(20, 8)
-  currency         String   @default("ACBU") @db.VarChar(10)
-  recipientAddress String?  @map("recipient_address") @db.VarChar(56)
-  recipientAccount Json?    @map("recipient_account")
-  status           String   @default("pending") @db.VarChar(20)
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
-
-  salaryBatch SalaryBatch  @relation(fields: [salaryBatchId], references: [id])
-  transaction Transaction? @relation(fields: [transactionId], references: [id])
-
-  @@index([salaryBatchId], map: "idx_salary_item_batch_id")
-  @@index([transactionId], map: "idx_salary_item_transaction_id")
-  @@index([status], map: "idx_salary_item_status")
-  @@map("salary_items")
-}
-
-model UserDevice {
-  id           String    @id @default(uuid()) @db.Uuid
-  userId       String    @map("user_id") @db.Uuid
-  deviceToken  String?   @map("device_token") @db.VarChar(512)
-  platform     String    @db.VarChar(20)
-  name         String?   @db.VarChar(100)
-  lastActiveAt DateTime? @map("last_active_at") @db.Timestamp(6)
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamp(6)
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@index([userId], map: "idx_user_device_user_id")
-  @@index([platform], map: "idx_user_device_platform")
-  @@index([lastActiveAt], map: "idx_user_device_last_active_at")
-  @@map("user_devices")
-}
