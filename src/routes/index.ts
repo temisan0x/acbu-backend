@@ -96,5 +96,6 @@ router.use("/fiat", fiatRoutes);
 router.use("/config", configRoutes);
 router.use("/kyc", kycRoutes);
 router.use("/webhooks", webhookRoutes);
+router.use("/compliance", complianceRoutes);
 
 export default router;
