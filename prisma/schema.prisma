@@ -540,3 +540,21 @@ model RecoveryAttempt {
   @@index([success], map: "idx_recovery_attempt_success")
   @@map("recovery_attempts")
 }
+
+model InvestmentStrategy {
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String   @unique @db.VarChar(100)
+  description          String?  @db.Text
+  status               String   @default("active") @db.VarChar(20) // 'active' | 'paused' | 'deprecated'
+  policyLimitUsd       Decimal  @map("policy_limit_usd") @db.Decimal(20, 2)
+  deployedNotionalUsd  Decimal  @default(0) @map("deployed_notional_usd") @db.Decimal(20, 2)
+  targetApyBps         Int?     @map("target_apy_bps")
+  riskTier             String   @default("medium") @map("risk_tier") @db.VarChar(20) // 'low' | 'medium' | 'high'
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@index([status], map: "idx_investment_strategies_status")
+  @@index([riskTier], map: "idx_investment_strategies_risk_tier")
+  @@map("investment_strategies")
+}
+
