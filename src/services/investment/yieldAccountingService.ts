@@ -120,6 +120,28 @@ export async function accrueFromStrategies(days = 1, asOf: Date = new Date()): P
         amountUsd,
         timestamp: new Date(asOf.getTime()),
       });
+
+      // Persist an accrual posting so statement APIs and audits can report yield.
+      // We record this as a completed `accrual` transaction with a JSON `rateSnapshot`
+      // marker so downstream consumers can identify and aggregate accruals.
+      try {
+        await prisma.transaction.create({
+          data: {
+            type: "accrual",
+            status: "completed",
+            usdcAmount: new Decimal(amountUsd),
+            // Attach strategy id and source for discoverability in JSON
+            rateSnapshot: {
+              source: "yield_accrual",
+              strategyId: s.id,
+            },
+            completedAt: new Date(asOf.getTime()),
+          },
+        });
+      } catch (e) {
+        // Log and continue; accruals should not block the scheduler on transient DB errors.
+        logger.error("Failed to persist accrual transaction", e);
+      }
     }
   } catch (err) {
     logger.error("Failed to accrue yields from strategies", err);
