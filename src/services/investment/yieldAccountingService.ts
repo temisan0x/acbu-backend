@@ -3,6 +3,8 @@
  * This module keeps a normalized in-memory ledger for deterministic calculations.
  */
 import { logger } from "../../config/logger";
+import { prisma } from "../../config/database";
+import { Decimal } from "@prisma/client/runtime/library";
 
 export type YieldSource = "reserve" | "vault" | "pool";
 
@@ -87,4 +89,40 @@ export function getYieldTotals(): Record<YieldSource, number> {
     vault: getYieldTotal("vault"),
     pool: getYieldTotal("pool"),
   };
+}
+
+/**
+ * Compute accruals from deployed strategy notional and record as yield postings.
+ * - Uses `investmentStrategy.deployedNotionalUsd` and `targetApyBps`.
+ * - Accrual formula (pro-rate by days in period): amount = principal * (apy/100) * (days/365)
+ * This implementation computes accrual for a single day (pro-rated) when called without
+ * a `days` argument; callers may pass the number of days in the accrual period.
+ */
+export async function accrueFromStrategies(days = 1, asOf: Date = new Date()): Promise<void> {
+  try {
+    const strategies = await prisma.investmentStrategy.findMany({ where: { status: "active" } });
+
+    for (const s of strategies) {
+      if (!s.targetApyBps || s.targetApyBps <= 0) continue;
+      const principal = new Decimal(s.deployedNotionalUsd || 0);
+      if (principal.lte(0)) continue;
+
+      const apy = new Decimal(s.targetApyBps).div(10000); // bps -> decimal (e.g., 250 -> 0.025)
+      const daysDecimal = new Decimal(days);
+      const accrual = principal.mul(apy).mul(daysDecimal).div(365);
+
+      const amountUsd = Number(accrual.toFixed(8));
+      if (!Number.isFinite(amountUsd) || amountUsd <= 0) continue;
+
+      // Record as 'vault' yield (accrual tied to deployed strategy / vault positions)
+      recordYield({
+        source: "vault",
+        amountUsd,
+        timestamp: new Date(asOf.getTime()),
+      });
+    }
+  } catch (err) {
+    logger.error("Failed to accrue yields from strategies", err);
+    throw err;
+  }
 }
