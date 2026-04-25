@@ -16,6 +16,7 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default("7d"),
   JWT_CLOCK_TOLERANCE_SECONDS: z.coerce.number().default(30),
   API_KEY_SALT: z.string().default(""),
+  ADMIN_API_KEY: z.string().optional(),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX_REQUESTS: z.coerce.number().default(100),
 });
@@ -54,6 +55,7 @@ export const config = {
   jwtClockToleranceSeconds: env.JWT_CLOCK_TOLERANCE_SECONDS,
   challengeTokenSecret: env.CHALLENGE_TOKEN_SECRET || env.JWT_SECRET,
   apiKeySalt: env.API_KEY_SALT,
+  adminApiKey: env.ADMIN_API_KEY,
   rateLimitWindowMs: env.RATE_LIMIT_WINDOW_MS,
   rateLimitMaxRequests: env.RATE_LIMIT_MAX_REQUESTS,
 
