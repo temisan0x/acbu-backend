@@ -13,9 +13,6 @@ jest.mock("../src/config/database", () => ({
       findUnique: jest.fn(),
       findMany: jest.fn(),
     },
-    apiKey: {
-      findMany: jest.fn(),
-    },
   },
 }));
 
@@ -33,7 +30,6 @@ const mockSendSms = sendSms as jest.Mock;
 const mockRenderTemplate = renderInvestmentWithdrawalReadyTemplate as jest.Mock;
 const mockFindUnique = prisma.user.findUnique as jest.Mock;
 const mockFindMany = prisma.user.findMany as jest.Mock;
-const mockApiKeyFindMany = prisma.apiKey.findMany as jest.Mock;
 
 // Simulating the notification consumer logic directly for testing
 async function processNotification(payload: any): Promise<void> {
@@ -142,21 +138,14 @@ describe("Notification Consumer - investment_withdrawal_ready", () => {
     expect(mockSendSms).toHaveBeenCalledWith(userPhone, "<html>Investment ready</html>");
   });
 
-  it("should send notifications ONLY to org admins for org withdrawal", async () => {
-    // Mock the API keys for the org
-    mockApiKeyFindMany.mockResolvedValue([
-      { userId: "admin-1", permissions: ["sme:admin"] },
-      { userId: "admin-2", permissions: ["enterprise:admin"] },
-      { userId: "member-1", permissions: ["sme:read"] }, // Non-admin
-    ]);
-
-    const orgAdmins = [
+  it("should send notifications to all org members for org withdrawal", async () => {
+    const orgMembers = [
       { email: "admin1@org.com", phoneE164: "+1111111111" },
       { email: "admin2@org.com", phoneE164: null },
       { email: null, phoneE164: "+2222222222" },
     ];
 
-    mockFindMany.mockResolvedValue(orgAdmins);
+    mockFindMany.mockResolvedValue(orgMembers);
 
     const payload = {
       type: "investment_withdrawal_ready",
@@ -167,16 +156,6 @@ describe("Notification Consumer - investment_withdrawal_ready", () => {
     };
 
     await processNotification(payload);
-
-    expect(mockApiKeyFindMany).toHaveBeenCalledWith({
-      where: { organizationId: "org-123" },
-      select: { userId: true, permissions: true },
-    });
-
-    expect(mockFindMany).toHaveBeenCalledWith({
-      where: { id: { in: ["admin-1", "admin-2"] } },
-      select: { email: true, phoneE164: true },
-    });
 
     expect(mockSendEmail).toHaveBeenCalledTimes(2);
     expect(mockSendEmail).toHaveBeenCalledWith(
@@ -195,10 +174,7 @@ describe("Notification Consumer - investment_withdrawal_ready", () => {
     expect(mockSendSms).toHaveBeenCalledWith("+2222222222", "<html>Investment ready</html>");
   });
 
-  it("should not send notifications if org has no admin users", async () => {
-    mockApiKeyFindMany.mockResolvedValue([
-      { userId: "member-1", permissions: ["sme:read"] },
-    ]);
+  it("should not send notifications if org has no users", async () => {
     mockFindMany.mockResolvedValue([]);
 
     const payload = {
@@ -215,16 +191,13 @@ describe("Notification Consumer - investment_withdrawal_ready", () => {
     expect(mockSendSms).not.toHaveBeenCalled();
   });
 
-  it("should skip empty email/phone fields for org admins", async () => {
-    mockApiKeyFindMany.mockResolvedValue([
-      { userId: "admin-1", permissions: ["sme:admin"] },
-    ]);
-    const orgAdmins = [
+  it("should skip empty email/phone fields for org members", async () => {
+    const orgMembers = [
       { email: null, phoneE164: null },
       { email: "valid@org.com", phoneE164: null },
     ];
 
-    mockFindMany.mockResolvedValue(orgAdmins);
+    mockFindMany.mockResolvedValue(orgMembers);
 
     const payload = {
       type: "investment_withdrawal_ready",
@@ -252,9 +225,6 @@ describe("Notification Consumer - investment_withdrawal_ready", () => {
       phoneE164: null,
     });
 
-    mockApiKeyFindMany.mockResolvedValue([
-      { userId: "admin-1", permissions: ["sme:admin"] },
-    ]);
     mockFindMany.mockResolvedValue([
       { email: "admin@org.com", phoneE164: null },
       { email: "member@org.com", phoneE164: null },
