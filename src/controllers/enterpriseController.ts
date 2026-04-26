@@ -1,38 +1,77 @@
 import { Request, Response, NextFunction } from "express";
-import { treasuryService } from "../services/treasury/TreasuryService";
+import { AuthRequest } from "../middleware/auth";
 import { AppError } from "../middleware/errorHandler";
+import { processBulkTransfer } from "../services/enterpriseService";
 
+function getUploadedFile(
+  req: Request,
+):
+  | { buffer: Buffer; originalname?: string; mimetype?: string; size?: number }
+  | undefined {
+  const anyReq = req as Request & {
+    file?: {
+      buffer?: Buffer;
+      originalname?: string;
+      mimetype?: string;
+      size?: number;
+    };
+    files?: Array<{
+      buffer?: Buffer;
+      originalname?: string;
+      mimetype?: string;
+      size?: number;
+    }>;
+  };
+
+  const file = anyReq.file ?? anyReq.files?.[0];
+  if (!file?.buffer) {
+    return undefined;
+  }
+
+  return file as { buffer: Buffer; originalname?: string; mimetype?: string; size?: number };
+}
+
+function isCsvUpload(file: {
+  originalname?: string;
+  mimetype?: string;
+}): boolean {
+  const name = file.originalname?.toLowerCase() ?? "";
+  const mimetype = file.mimetype?.toLowerCase() ?? "";
+  return (
+    mimetype.includes("text/csv") ||
+    mimetype.includes("text/plain") ||
+    name.endsWith(".csv")
+  );
+}
+
+/**
+ * POST /enterprise/bulk-transfer
+ * Process a bulk CSV transfer upload for an enterprise organization.
+ */
 export async function postBulkTransfer(
-  _req: Request,
+  req: AuthRequest,
   res: Response,
   next: NextFunction,
 ): Promise<void> {
   try {
     // TODO: bulk transfer (many transfers); idempotency; enterprise limits
-    res.status(501).json({
-      error: "NOT_IMPLEMENTED",
-      message:
-        "Bulk transfer endpoint not yet implemented. Use /transfers for single transfers.",
-    });
+    throw new AppError(
+      "Bulk transfer endpoint not yet implemented. Use /transfers for single transfers.",
+      501,
+      "NOT_IMPLEMENTED",
+    );
+
   } catch (e) {
+    if (e instanceof AppError) {
+      return next(e);
+    }
     next(e);
   }
 }
 
 /**
- * GET /treasury
- * Returns verified enterprise treasury balance with reconciliation status.
- *
- * Features:
- * - Aggregates data from Transfers (transactions), Reserves, and FX Snapshots
- * - Handles null values: defaults to 0 for missing segments
- * - FX Fallback: uses most recent available rate if current rate missing
- * - Reconciliation: verifies calculated total against ledger with 0.01% tolerance
- *
- * Response:
- * - totalBalanceUsd: Sum of all reserve holdings in USD
- * - byCurrency: Breakdown by currency with transaction and investment segments
- * - reconciliation: Status and warnings for data consistency
+ * GET /enterprise/treasury
+ * Returns a stub treasury response until treasury aggregation is implemented.
  */
 export async function getTreasury(
   req: Request,
@@ -40,19 +79,6 @@ export async function getTreasury(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const organizationId = (req as any).apiKey?.organizationId || undefined;
-    const toleranceStr = req.query.tolerance as string | undefined;
-    
-    let tolerance = 0.01; // Default 0.01%
-    if (toleranceStr) {
-      const parsed = Number(toleranceStr);
-      if (!Number.isNaN(parsed) && parsed >= 0 && parsed <= 100) {
-        tolerance = parsed;
-      }
-    }
-
-    const treasury = await treasuryService.getEnterpriseTreasury(organizationId, tolerance);
-
     res.status(200).json({
       totalBalanceUsd: treasury.totalBalanceUsd,
       totalReserveAmount: treasury.totalReserveAmount,
