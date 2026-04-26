@@ -4,23 +4,11 @@ import bcrypt from "bcryptjs";
 import { AppError } from "./errorHandler";
 import { logger } from "../config/logger";
 import jwt from "jsonwebtoken";
+import { PermissionsArraySchema, PermissionScope } from "../types/permissions";
 
 export type Audience = "retail" | "business" | "government";
 export type UserTier = "free" | "verified" | "sme" | "enterprise";
 export type ApiKeyType = "USER_KEY" | "ADMIN_KEY" | "BREAK_GLASS_KEY";
-export type PermissionScope =
-  | "p2p:read"
-  | "p2p:write"
-  | "p2p:admin"
-  | "sme:read"
-  | "sme:write"
-  | "sme:admin"
-  | "gateway:read"
-  | "gateway:write"
-  | "gateway:admin"
-  | "enterprise:read"
-  | "enterprise:write"
-  | "enterprise:admin";
 const API_KEY_PREFIX = "acbu";
 const API_KEY_LOOKUP_LENGTH = 12;
 const API_KEY_SECRET_LENGTH = 64;
@@ -38,7 +26,7 @@ export interface AuthRequest extends Request {
     createdByUserId: string | null;
     emergencyReason: string | null;
     emergencyExpiresAt: Date | null;
-    permissions: string[];
+    permissions: PermissionScope[];
     rateLimit: number;
   };
   /** Set by audience-specific routes (e.g. /retail, /business, /government) for limits and behaviour. */
@@ -52,18 +40,16 @@ export interface AuthRequest extends Request {
  * @param permissions - Raw permissions from database (Json type)
  * @returns Array of validated permission strings, or empty array if invalid
  */
-function validatePermissions(permissions: unknown): string[] {
-  if (!permissions) {
+function validatePermissions(permissions: unknown): PermissionScope[] {
+  const result = PermissionsArraySchema.safeParse(permissions);
+  if (!result.success) {
+    logger.warn("Invalid permissions in API key record", {
+      raw: permissions,
+      errors: result.error.flatten().fieldErrors,
+    });
     return [];
   }
-
-  if (Array.isArray(permissions)) {
-    return permissions.every((p) => typeof p === "string")
-      ? (permissions as string[])
-      : [];
-  }
-
-  return [];
+  return result.data;
 }
 
 function parseApiKey(
@@ -216,7 +202,7 @@ export async function hashApiKey(secret: string): Promise<string> {
  */
 export async function generateApiKey(
   userId?: string,
-  permissions: string[] = [],
+  permissions: PermissionScope[] = [],
   options?: {
     organizationId?: string | null;
     keyType?: ApiKeyType;

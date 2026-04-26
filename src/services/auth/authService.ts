@@ -15,8 +15,13 @@ import { QUEUES } from "../../config/rabbitmq";
 import { ensureWalletForUser } from "../wallet/walletService";
 import { logAudit } from "../audit";
 import { authBruteGuard } from "../../utils/authBruteGuard";
+import {
+  PermissionsArraySchema,
+  PermissionScope,
+} from "../../types/permissions";
 
-const DUMMY_HASH = "$2a$10$CwTycUXWue0Thq9StjUM0uEnOTWj2XOTl0pypEQuA7y2h2H6jX.m2"; // hash for 'dummy'
+const DUMMY_HASH =
+  "$2a$10$CwTycUXWue0Thq9StjUM0uEnOTWj2XOTl0pypEQuA7y2h2H6jX.m2"; // hash for 'dummy'
 
 export interface SignupParams {
   username: string;
@@ -133,20 +138,31 @@ function isAdminTierUser(tier: string | null | undefined): boolean {
   return tier === ADMIN_TIER;
 }
 
-function validateAdminScopes(scopes: string[]): string[] {
-  if (!Array.isArray(scopes) || scopes.length === 0) {
-    return [];
+function validateAdminScopes(scopes: string[]): PermissionScope[] {
+  const parsed = PermissionsArraySchema.safeParse(scopes);
+  if (!parsed.success) {
+    const invalid = parsed.error.errors.map((e) => e.message).join(", ");
+    throw new Error(`Invalid permission scope(s): ${invalid}`);
   }
-  const allowed = new Set<string>(ADMIN_SCOPES);
-  return scopes.filter((scope) => allowed.has(scope));
+  const adminOnly = parsed.data.filter((s) =>
+    (ADMIN_SCOPES as readonly string[]).includes(s),
+  );
+  if (adminOnly.length === 0) {
+    throw new Error("At least one admin scope is required");
+  }
+  return adminOnly;
 }
 
 async function publishOtp(channel: "sms" | "email", to: string, code: string) {
   const ch = getRabbitMQChannel();
   await ch.assertQueue(QUEUES.OTP_SEND, { durable: true });
-  ch.sendToQueue(QUEUES.OTP_SEND, Buffer.from(JSON.stringify({ channel, to, code })), {
-    persistent: true,
-  });
+  ch.sendToQueue(
+    QUEUES.OTP_SEND,
+    Buffer.from(JSON.stringify({ channel, to, code })),
+    {
+      persistent: true,
+    },
+  );
 }
 
 async function verifyMfaChallengeForUser(
@@ -448,8 +464,7 @@ export async function verify2fa(
       organizationId: true,
     },
   });
-  if (!user || !user.twoFaMethod)
-    throw new Error("Invalid credentials"); // Uniform message
+  if (!user || !user.twoFaMethod) throw new Error("Invalid credentials"); // Uniform message
 
   let valid = false;
   if (user.twoFaMethod === "totp") {
@@ -655,7 +670,9 @@ export async function issueBreakGlassKey(
 
   const ttlMinutes = params.ttlMinutes ?? BREAK_GLASS_DEFAULT_TTL_MINUTES;
   if (ttlMinutes < 1 || ttlMinutes > BREAK_GLASS_MAX_TTL_MINUTES) {
-    throw new Error(`Break-glass TTL must be between 1 and ${BREAK_GLASS_MAX_TTL_MINUTES} minutes`);
+    throw new Error(
+      `Break-glass TTL must be between 1 and ${BREAK_GLASS_MAX_TTL_MINUTES} minutes`,
+    );
   }
 
   const permissions =
