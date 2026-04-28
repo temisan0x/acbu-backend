@@ -32,44 +32,44 @@ model Organization {
 }
 
 model User {
-  id                       String                     @id @default(uuid()) @db.Uuid
-  stellarAddress           String?                    @unique @db.VarChar(56)
-  kycStatus                String                     @default("pending") @db.VarChar(20)
-  kycVerifiedAt            DateTime?                  @map("kyc_verified_at") @db.Timestamp(6)
-  countryCode              String?                    @map("country_code") @db.VarChar(3)
-  username                 String?                    @unique @db.VarChar(64)
-  phoneE164                String?                    @unique @map("phone_e164") @db.VarChar(20)
-  email                    String?                    @unique @db.VarChar(255)
-  emailVerifiedAt          DateTime?                  @map("email_verified_at") @db.Timestamp(6)
-  phoneVerifiedAt          DateTime?                  @map("phone_verified_at") @db.Timestamp(6)
-  privacyHideFromSearch    Boolean                    @default(true) @map("privacy_hide_from_search")
-  passcodeHash             String?                    @map("passcode_hash") @db.VarChar(255)
-  encryptedStellarSecret   String?                    @map("encrypted_stellar_secret") @db.VarChar(512)
-  keyEncryptionHint        String?                    @map("key_encryption_hint") @db.VarChar(50)
-  twoFaMethod              String?                    @map("two_fa_method") @db.VarChar(20)
-  totpSecretEncrypted      String?                    @map("totp_secret_encrypted") @db.VarChar(512)
-  actorType                String                     @default("retail") @map("actor_type") @db.VarChar(20)
-  tier                     String                     @default("free") @db.VarChar(20)
-  organizationId           String?                    @map("organization_id") @db.Uuid
-  failedSigninAttempts    Int                        @default(0) @map("failed_signin_attempts")
-  lockoutUntil           DateTime?                  @map("lockout_until") @db.Timestamp(6)
-  createdAt                DateTime                   @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt                DateTime                   @updatedAt @map("updated_at") @db.Timestamp(6)
-  apiKeys                  ApiKey[]
-  wardGuardians            Guardian[]                 @relation("GuardianWard")
-  guardians                Guardian[]                 @relation("UserGuardians")
-  kycApplications          KycApplication[]
-  kycValidators            KycValidator[]
-  onRampSwaps              OnRampSwap[]
-  otpChallenges            OtpChallenge[]
-  transactions             Transaction[]
-  contactOf                UserContact[]              @relation("ContactOf")
-  contacts                 UserContact[]              @relation("UserContacts")
-  passkeys                 UserPasskey[]
-  userDevices              UserDevice[]
-  organization             Organization?              @relation("UserOrganization", fields: [organizationId], references: [id])
-  salaryBatches            SalaryBatch[]
-  salarySchedules          SalarySchedule[]
+  id                     String           @id @default(uuid()) @db.Uuid
+  stellarAddress         String?          @unique @db.VarChar(56)
+  // B-013: stellarAddress is validated at application level and database constraint
+  // Valid addresses: 56 chars, starts with 'G', base32 encoded, not a placeholder
+  kycStatus              String           @default("pending") @db.VarChar(20)
+  kycVerifiedAt          DateTime?        @map("kyc_verified_at") @db.Timestamp(6)
+  countryCode            String?          @map("country_code") @db.VarChar(3)
+  username               String?          @unique @db.VarChar(64)
+  phoneE164              String?          @unique @map("phone_e164") @db.VarChar(20)
+  email                  String?          @unique @db.VarChar(255)
+  emailVerifiedAt        DateTime?        @map("email_verified_at") @db.Timestamp(6)
+  phoneVerifiedAt        DateTime?        @map("phone_verified_at") @db.Timestamp(6)
+  privacyHideFromSearch  Boolean          @default(true) @map("privacy_hide_from_search")
+  passcodeHash           String?          @map("passcode_hash") @db.VarChar(255)
+  encryptedStellarSecret String?          @map("encrypted_stellar_secret") @db.VarChar(512)
+  keyEncryptionHint      String?          @map("key_encryption_hint") @db.VarChar(50)
+  twoFaMethod            String?          @map("two_fa_method") @db.VarChar(20)
+  totpSecretEncrypted    String?          @map("totp_secret_encrypted") @db.VarChar(512)
+  actorType              String           @default("retail") @map("actor_type") @db.VarChar(20)
+  tier                   String           @default("free") @db.VarChar(20)
+  organizationId         String?          @map("organization_id") @db.Uuid
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamp(6)
+  apiKeys                ApiKey[]
+  wardGuardians          Guardian[]       @relation("GuardianWard")
+  guardians              Guardian[]       @relation("UserGuardians")
+  kycApplications        KycApplication[]
+  kycValidators          KycValidator[]
+  onRampSwaps            OnRampSwap[]
+  otpChallenges          OtpChallenge[]
+  transactions           Transaction[]
+  contactOf              UserContact[]    @relation("ContactOf")
+  contacts               UserContact[]    @relation("UserContacts")
+  passkeys               UserPasskey[]
+  userDevices            UserDevice[]
+  organization           Organization?    @relation("UserOrganization", fields: [organizationId], references: [id])
+  salaryBatches          SalaryBatch[]
+  salarySchedules        SalarySchedule[]
 
   @@index([stellarAddress], map: "idx_stellar_address")
   @@index([username], map: "idx_username")
